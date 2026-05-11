@@ -104,6 +104,12 @@ std::vector<AudioStream::DeviceInfo> AudioStream::GetOutputDevices(AudioBackend 
 	return ret;
 }
 
+// Forward declaration — defined in pcsx2-libretro/LibretroAudioStream.cpp.
+// Resolves only when the libretro core is built (ENABLE_LIBRETRO=ON);
+// upstream PCSX2 builds never reference it because Backend defaults to Cubeb.
+extern std::unique_ptr<AudioStream> CreateLibretroAudioStream(u32 sample_rate,
+	const AudioStreamParameters& parameters, bool stretch_enabled, Error* error);
+
 std::unique_ptr<AudioStream> AudioStream::CreateStream(AudioBackend backend, u32 sample_rate, const AudioStreamParameters& parameters,
 	const char* driver_name, const char* device_name, bool stretch_enabled, Error* error)
 {
@@ -118,6 +124,9 @@ std::unique_ptr<AudioStream> AudioStream::CreateStream(AudioBackend backend, u32
 
 		case AudioBackend::SDL:
 			return CreateSDLAudioStream(sample_rate, parameters, stretch_enabled, error);
+
+		case AudioBackend::Libretro: // pcsx2-libretro (SP4) — defined in pcsx2-libretro/LibretroAudioStream.cpp
+			return CreateLibretroAudioStream(sample_rate, parameters, stretch_enabled, error);
 
 		case AudioBackend::Null:
 			return CreateNullStream(sample_rate, parameters.buffer_ms);
@@ -149,11 +158,13 @@ static constexpr const std::array s_backend_names = {
 	"Null",
 	"Cubeb",
 	"SDL",
+	"Libretro", // pcsx2-libretro (SP4)
 };
 static constexpr const std::array s_backend_display_names = {
 	TRANSLATE_NOOP("AudioStream", "Null (No Output)"),
 	TRANSLATE_NOOP("AudioStream", "Cubeb"),
 	TRANSLATE_NOOP("AudioStream", "SDL"),
+	TRANSLATE_NOOP("AudioStream", "Libretro"), // pcsx2-libretro (SP4)
 };
 
 std::optional<AudioBackend> AudioStream::ParseBackendName(const char* str)
