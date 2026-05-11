@@ -13,6 +13,7 @@ target_sources(pcsx2_libretro PRIVATE
     HostStubs.cpp
     Settings.cpp
     EmuThread.cpp
+    LibretroAudioStream.cpp
 )
 
 target_include_directories(pcsx2_libretro PRIVATE
