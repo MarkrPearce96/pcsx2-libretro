@@ -153,8 +153,28 @@ RETRO_API void retro_get_system_av_info(struct retro_system_av_info* info)
 
 RETRO_API void retro_set_controller_port_device(unsigned port, unsigned device)
 {
-    FrontendLog(RETRO_LOG_INFO, "retro_set_controller_port_device(port=%u, device=%u) — ignored in skeleton",
-                port, device);
+    // SP5: we want both physical PS2 ports treated as analog DualShock 2.
+    // Accept JOYPAD and ANALOG (both query through the same trampoline);
+    // log + ignore other types (mouse, lightgun, keyboard) for now.
+    if (port >= 2)
+    {
+        FrontendLog(RETRO_LOG_WARN,
+            "retro_set_controller_port_device: port %u out of range (max 2)", port);
+        return;
+    }
+
+    if (device != RETRO_DEVICE_NONE &&
+        device != RETRO_DEVICE_JOYPAD &&
+        device != RETRO_DEVICE_ANALOG)
+    {
+        FrontendLog(RETRO_LOG_INFO,
+            "retro_set_controller_port_device(port=%u, device=%u) — unsupported, ignoring",
+            port, device);
+        return;
+    }
+
+    FrontendLog(RETRO_LOG_INFO,
+        "retro_set_controller_port_device(port=%u, device=%u) acknowledged", port, device);
 }
 
 RETRO_API void retro_reset(void)
