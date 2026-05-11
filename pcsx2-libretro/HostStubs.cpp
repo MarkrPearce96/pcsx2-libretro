@@ -240,6 +240,15 @@ void Host::SetMouseLock(bool state)
 
 std::optional<WindowInfo> Host::AcquireRenderWindow(bool /*recreate_window*/)
 {
+    // Hard diagnostic: bypass FrontendLog / libretro log_cb routing in case
+    // log_cb dropped MTGS-thread messages. Writes to /tmp/sp3_trace.log.
+    if (FILE* trace = std::fopen("/tmp/sp3_trace.log", "a"))
+    {
+        std::fprintf(trace, "[AcquireRenderWindow] entered (environ_cb=%p)\n",
+                     reinterpret_cast<void*>(Pcsx2Libretro::g_frontend.environ_cb));
+        std::fclose(trace);
+    }
+
     if (!Pcsx2Libretro::g_frontend.environ_cb)
     {
         Pcsx2Libretro::FrontendLog(RETRO_LOG_ERROR, "AcquireRenderWindow: no environ_cb available");
