@@ -155,8 +155,21 @@ void InitializeDefaults(const std::string& system_dir)
     // GSRendererType::Auto == -1 in pcsx2/Config.h.
     g_si.SetIntValue("EmuCore/GS", "Renderer", static_cast<int>(-1));
 
-    // Disable hardware audio output — SPU2 still initializes but discards.
-    g_si.SetStringValue("SPU2/Output", "OutputModule", "nullout");
+    // SP4: route SPU2 → retro_audio_sample_batch_t via LibretroAudioStream.
+    // The Backend value is the AudioBackend name string matching s_backend_names
+    // in pcsx2/Host/AudioStream.cpp; "Libretro" is the SP4 enum addition.
+    // Section "SPU2/Output" matches Pcsx2Config.cpp:1258's SettingsWrapSection.
+    // (The previous "OutputModule"/"nullout" line was a no-op — that key was
+    // removed when PCSX2 migrated to the AudioStream/AudioBackend model, so
+    // SPU2 was actually defaulting to AudioBackend::Cubeb. SP4 replaces it
+    // with the correct, current API.)
+    g_si.SetStringValue("SPU2/Output", "Backend", "Libretro");
+
+    // Libretro's batch callback is stereo only. Forcing expansion off
+    // avoids LibretroAudioStream's pxAssertRel(expansion_mode == Disabled).
+    // Same section because StreamParameters::LoadSave uses CURRENT_SETTINGS_SECTION,
+    // which is "SPU2/Output" here.
+    g_si.SetStringValue("SPU2/Output", "ExpansionMode", "Disabled");
 
     // Disable achievements (avoid network init during boot).
     g_si.SetBoolValue("Achievements", "Enabled", false);
