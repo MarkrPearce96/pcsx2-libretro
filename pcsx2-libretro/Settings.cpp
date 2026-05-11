@@ -38,6 +38,18 @@ void InitializeDefaults(const std::string& system_dir)
     // device needs to load Metal23/Metal22/default.metallib.  It returns false
     // if the directory doesn't exist, but we continue regardless.
     EmuFolders::SetResourcesDirectory();
+
+    // SP3: SetResourcesDirectory() on macOS uses CocoaTools::GetResourcePath()
+    // which returns the running app bundle's Resources dir (RetroNest's).
+    // RetroNest's bundle doesn't have PCSX2's metallibs / patches.zip /
+    // gamedb.yaml. Override directly to pcsx2-master's bin/resources/.
+    //
+    // TODO: hardcoded absolute path for SP3 MVP. SP7 (settings) should
+    // derive this from dladdr() on our dylib + a known relative offset,
+    // or have RetroNest copy these resources into a location adjacent
+    // to the dylib at install time.
+    EmuFolders::Resources =
+        "/Users/mark/Documents/Projects/Pcsx2 Experiment /pcsx2-master/bin/resources";
     {
         Error err;
         if (!EmuFolders::SetDataDirectory(&err))
@@ -60,11 +72,26 @@ void InitializeDefaults(const std::string& system_dir)
     // Now override the SP2-required minimums.
     g_si.SetStringValue("Folders", "Bios", system_dir.c_str());
 
-    // Force null GS renderer — does not require a display window or GPU.
-    // GSRendererType::Null == 11 in pcsx2/Config.h. SW (13) requires a
-    // real render device and crashes without a window; Null is the correct
-    // headless choice for test_loader and libretro bootstrap.
-    g_si.SetIntValue("EmuCore/GS", "Renderer", static_cast<int>(11));
+    // SP3: point Folders/Resources at pcsx2-master's bin/resources/ so
+    // GSDeviceMTL can load Metal22.metallib / Metal23.metallib / default.metallib
+    // and PCSX2 can load patches.zip / gamedb.yaml / etc. Without this,
+    // GSDeviceMTL::Create silently fails (m_dev.IsOk() returns false
+    // when the shader library doesn't load) and AcquireWindow is never
+    // called.
+    //
+    // TODO: this is a hardcoded absolute path for SP3 MVP. SP7 (settings)
+    // should derive this from a runtime path (e.g. dladdr() on this dylib
+    // to find its on-disk location, then a known relative offset), or
+    // have RetroNest copy these resources next to the dylib at install time.
+    g_si.SetStringValue("Folders", "Resources",
+        "/Users/mark/Documents/Projects/Pcsx2 Experiment /pcsx2-master/bin/resources");
+
+    // SP3: switched from Null (11) to Auto (-1). The Null renderer was
+    // appropriate in SP2 when we had no display surface. SP3 provides a
+    // real CAMetalLayer via Pattern B, so PCSX2 should actually render.
+    // Auto resolves to Metal on macOS via GSUtil::GetPreferredRenderer().
+    // GSRendererType::Auto == -1 in pcsx2/Config.h.
+    g_si.SetIntValue("EmuCore/GS", "Renderer", static_cast<int>(-1));
 
     // Disable hardware audio output — SPU2 still initializes but discards.
     g_si.SetStringValue("SPU2/Output", "OutputModule", "nullout");
@@ -77,6 +104,15 @@ void InitializeDefaults(const std::string& system_dir)
 
     // Disable HostFS (we don't expose host filesystem to the VM).
     g_si.SetBoolValue("EmuCore", "HostFs", false);
+
+    // Enable system console + verbose logging so PCSX2's Console.WriteLn /
+    // Console.Error output reaches our stderr (captured by RetroNest's log
+    // file). Without this, internal PCSX2 diagnostics during GS device
+    // creation / VM boot are invisible, making it impossible to diagnose
+    // failures. Matches gsrunner's pattern (gsrunner/Main.cpp:889-891).
+    g_si.SetBoolValue("Logging", "EnableSystemConsole", true);
+    g_si.SetBoolValue("Logging", "EnableTimestamps", false);
+    g_si.SetBoolValue("Logging", "EnableVerbose", true);
 
     // Disable input sources — SDL/XInput init during LoadSettings hangs
     // when there's no real controller subsystem to attach to. SP5 (input)
