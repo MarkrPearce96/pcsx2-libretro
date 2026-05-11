@@ -362,11 +362,13 @@ void LibretroInputSource::EmitAnalogEdges(u32 port, const std::array<int16_t, NU
         if (std::abs(static_cast<int>(v_new) - static_cast<int>(v_old)) < ANALOG_THRESHOLD)
             continue;
 
-        // Normalize int16 to float in [-1.0, 1.0]. For trigger axes (L2, R2)
-        // the value is already in [0, 32767]; divide by 32767. For stick
-        // axes [-32768, 32767], clamp the divisor to 32767 to keep |value|<=1.
-        const float value = std::clamp(
-            static_cast<float>(v_new) / 32767.0f, -1.0f, 1.0f);
+        // Normalize int16 to float in [-1.0, 1.0] using the same asymmetric
+        // divisor PCSX2's SDLInputSource uses (NormalizeS16). Maps -32768 to
+        // exactly -1.0 and 32767 to exactly 1.0 without needing a clamp.
+        // For trigger axes (L2, R2) the value is already in [0, 32767];
+        // the v_new < 0 branch is never taken for them.
+        const float value = static_cast<float>(v_new) /
+            (v_new < 0 ? 32768.0f : 32767.0f);
 
         const InputBindingKey key = InputSource::MakeGenericControllerAxisKey(
             InputSourceType::Libretro, port, static_cast<s32>(i));
