@@ -85,6 +85,20 @@ void EmuThread::RequestShutdown()
     // ThreadFunc, mirroring the pcsx2-qt frontend's pattern of
     // QMetaObject::invokeMethod(..., Qt::QueuedConnection) when
     // shutdownVM is called from a non-emu thread.
+    //
+    // SP3.6 NOTE: do NOT call Cpu->ExitExecution() from this non-CPU
+    // thread to nudge Execute. When the EE is using the interpreter
+    // (which is the active path in this build per crash diagnostics),
+    // the dispatch is intSafeExitExecution which does fastjmp_jmp from
+    // the caller's frame in the eeEventTestIsActive==false branch —
+    // that's a longjmp into the CPU thread's saved jmp buffer using
+    // OUR thread's stack/registers, which is undefined behavior and
+    // produces a SIGBUS shortly after. The recompiler's variant
+    // (recSafeExitExecution) IS safe (just writes a flag), but PCSX2
+    // doesn't expose a thread-safe "request exit" API that works
+    // across both interpreter and recompiler dispatch paths. SP3.6
+    // attempt 1 (calling Cpu->ExitExecution unconditionally) was
+    // verified to crash via this exact path.
     m_stop_requested.store(true, std::memory_order_release);
 }
 
@@ -92,35 +106,42 @@ void EmuThread::Join()
 {
     if (!m_thread.joinable()) return;
 
-    // Wait briefly for the graceful path (flag-poll + SetState from the
-    // CPU thread) to complete. VMManager::Execute() returns at natural
-    // checkpoints; for a running game that's every frame, but the PS2
-    // BIOS in an idle wait can leave the interpreter cycling on memory
-    // reads for seconds before the next event-test yields. The grace
-    // window keeps the common case clean.
-    constexpr auto kGracefulWindow = std::chrono::seconds(3);
-    constexpr auto kPollInterval   = std::chrono::milliseconds(50);
-    const auto deadline = std::chrono::steady_clock::now() + kGracefulWindow;
-    while (!m_thread_done.load(std::memory_order_acquire) &&
-           std::chrono::steady_clock::now() < deadline)
-    {
-        std::this_thread::sleep_for(kPollInterval);
-    }
-
-    if (!m_thread_done.load(std::memory_order_acquire))
-    {
-        // Fallback: force Cpu->ExitExecution from this non-CPU thread.
-        // SP3.5 Phase 2 noted this is racy with PCSX2's JIT recompiler
-        // and CAN crash. We only take this path after the grace window
-        // expired, so the failure mode degrades from "hang forever on
-        // quit" to "crash sometimes on quit" — strictly better.
-        FrontendLog(RETRO_LOG_WARN,
-            "EmuThread: graceful shutdown timed out after %llds; forcing "
-            "Cpu->ExitExecution. PCSX2 JIT race may cause a crash on this path.",
-            static_cast<long long>(kGracefulWindow.count()));
-        VMManager::SetState(VMState::Stopping);
-    }
-
+    // Wait for the CPU thread to exit naturally. The graceful path is:
+    // m_stop_requested is polled between Execute() iterations; CPU thread
+    // calls SetState(Stopping) on itself; Execute returns at the next
+    // safe checkpoint; ThreadFunc finishes Shutdown + signals m_thread_done.
+    // For a running game Execute returns every frame, so the wait is
+    // ~one frame.
+    //
+    // SP3.6 (parked — three attempts, all fail):
+    //
+    //   1. Call Cpu->ExitExecution from non-CPU thread to nudge Execute.
+    //      → Crashes immediately. With EE on interpreter (active in this
+    //      build), Cpu->ExitExecution dispatches to intSafeExitExecution
+    //      whose !eeEventTestIsActive branch does fastjmp_jmp from the
+    //      caller's frame — undefined behavior across threads.
+    //
+    //   2. Same wait + indefinite m_thread.join().
+    //      → No crash on quit click, but Execute may never return (e.g.
+    //      R&C 2's memory-card busy-wait screen). UI freezes; if the
+    //      user clicks the menu again RetroNest's GameSession cleanup
+    //      races and SIGSEGVs in LibretroMetalItem::~LibretroMetalItem.
+    //
+    //   3. Bounded wait then m_thread.detach().
+    //      → retro_unload_game returns, but RetroNest's CoreRuntime then
+    //      runs retro_deinit + m_loader.close() (dlclose). The detached
+    //      EmuThread is still executing inside the now-unmapped dylib
+    //      pages → SIGBUS shortly after.
+    //
+    // The "JIT race in IOP memory" attribution in the SP3.5 spec was
+    // incorrect — it's actually an interpreter-mode longjmp-from-wrong-
+    // thread bug. The proper upstream fix is for PCSX2 to expose a
+    // thread-safe "request exit" API that works for both recompiler and
+    // interpreter dispatch. Until then, the chosen behaviour here is
+    // attempt 2: indefinite wait. Quit hangs the UI in the worst case
+    // (user must Cmd+Q RetroNest from the dock to recover) but does not
+    // crash on the quit click itself, which is strictly better than the
+    // pre-attempt baseline that crashed via the forced-fallback SetState.
     m_thread.join();
 }
 
