@@ -70,6 +70,12 @@ else()
 	add_subdirectory(pcsx2-gsrunner EXCLUDE_FROM_ALL)
 endif()
 
+# libretro frontend (RetroNest)
+option(ENABLE_LIBRETRO "Build the libretro frontend (pcsx2_libretro.dylib)" OFF)
+if(ENABLE_LIBRETRO)
+    add_subdirectory(pcsx2-libretro)
+endif()
+
 #-------------------------------------------------------------------------------
 if(NOT IS_SUPPORTED_COMPILER)
 	message(WARNING "
