@@ -60,6 +60,19 @@ private:
     std::atomic<bool> m_init_done{false};
     std::atomic<bool> m_init_success{false};
     std::atomic<bool> m_thread_started{false};
+
+    // SP3.5 Phase 2: VMManager::SetState(Stopping) calls Cpu->ExitExecution()
+    // which manipulates JIT recompiler state. That's only safe to invoke from
+    // the CPU thread itself. The Qt frontend enforces this with
+    // QMetaObject::invokeMethod(Qt::QueuedConnection) from any non-emu thread;
+    // we mirror it with an atomic request flag that the emu thread polls
+    // between Execute() iterations and only THEN transitions to Stopping.
+    // RequestShutdown() just flips this flag.
+    std::atomic<bool> m_stop_requested{false};
+    // Set by ThreadFunc just before returning. Join() polls this with a
+    // bounded timeout so a stalled CPU thread (BIOS idle waits where the
+    // interpreter doesn't yield naturally) doesn't hang the host forever.
+    std::atomic<bool> m_thread_done{false};
 };
 
 // Singleton accessor — declared here, defined in EmuThread.cpp.
