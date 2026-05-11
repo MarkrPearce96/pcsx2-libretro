@@ -7,6 +7,7 @@
 // refuse retro_load_game. No VM is initialized; no PCSX2 code runs.
 
 #include "LibretroFrontend.h"
+#include "LibretroAudioStream.h"
 #include "libretro.h"
 
 #include "EmuThread.h"
@@ -191,6 +192,23 @@ RETRO_API void retro_run(void)
     std::unique_lock<std::mutex> lock(g_present_mutex);
     g_present_cv.wait_for(lock, 100ms, [] { return g_present_ready.load(); });
     g_present_ready.store(false, std::memory_order_release);
+    lock.unlock(); // release before draining; drain doesn't touch g_present_*
+
+    // SP4: drain SPU2 output. ActiveStream() is null pre-VM-init or post-
+    // shutdown; audio_batch_cb is null until the frontend has called
+    // retro_set_audio_sample_batch. Both are common at startup, so silently
+    // skip if either is missing.
+    if (auto* stream = Pcsx2Libretro::LibretroAudioStream::ActiveStream())
+    {
+        if (g_frontend.audio_batch_cb)
+        {
+            // Drain everything currently buffered, capped at MAX_FRAMES_PER_DRAIN
+            // (2048 stereo frames = 42 ms @ 48 kHz, comfortably bounds one frame's
+            // worth of audio at any reasonable host fps).
+            stream->DrainToLibretroCallback(g_frontend.audio_batch_cb,
+                Pcsx2Libretro::LibretroAudioStream::MAX_FRAMES_PER_DRAIN);
+        }
+    }
 }
 
 RETRO_API size_t retro_serialize_size(void) { return 0; }
