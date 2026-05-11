@@ -70,11 +70,71 @@ LibretroAudioStream* LibretroAudioStream::ActiveStream()
     return s_active_stream.load(std::memory_order_acquire);
 }
 
-u32 LibretroAudioStream::DrainToLibretroCallback(retro_audio_sample_batch_t /*cb*/, u32 /*max_frames*/)
+u32 LibretroAudioStream::DrainToLibretroCallback(retro_audio_sample_batch_t cb, u32 max_frames)
 {
-    // Stub — implemented in Task 4. Returning 0 keeps the link valid and
-    // produces silence (acceptable interim behavior).
-    return 0;
+    if (!cb)
+        return 0;
+
+    max_frames = std::min(max_frames, MAX_FRAMES_PER_DRAIN);
+
+    // Step 1: flush any frames the frontend rejected on the previous call.
+    // m_pending_frames is non-zero only if the previous cb() returned less
+    // than we passed it. We push those first so order is preserved.
+    if (m_pending_frames > 0)
+    {
+        const size_t accepted = cb(m_pending_buffer.data(), m_pending_frames);
+        if (accepted < m_pending_frames)
+        {
+            // Frontend still backed up. Shift unaccepted frames to the front.
+            const u32 remaining = static_cast<u32>(m_pending_frames - accepted);
+            std::memmove(m_pending_buffer.data(),
+                         m_pending_buffer.data() + accepted * 2,
+                         remaining * 2 * sizeof(int16_t));
+            m_pending_frames = remaining;
+            return 0; // Don't try to drain new frames while backed up.
+        }
+        m_pending_frames = 0;
+    }
+
+    // Step 2: read up to max_frames new frames from the ring buffer into a
+    // float staging buffer, then convert to int16 stereo.
+    const u32 available = std::min(GetBufferedFramesRelaxed(), max_frames);
+    if (available == 0)
+        return 0;
+
+    float float_staging[MAX_FRAMES_PER_DRAIN * 2];
+    ReadFrames(float_staging, available);
+
+    int16_t int_staging[MAX_FRAMES_PER_DRAIN * 2];
+    const u32 sample_count = available * 2; // stereo
+    for (u32 i = 0; i < sample_count; ++i)
+    {
+        const float f = std::clamp(float_staging[i], -1.0f, 1.0f);
+        int_staging[i] = static_cast<int16_t>(f * 32767.0f);
+    }
+
+    // Step 3: push to libretro.
+    const size_t accepted = cb(int_staging, available);
+
+    // Step 4: stash any unaccepted tail for the next drain.
+    if (accepted < available)
+    {
+        const u32 remaining = static_cast<u32>(available - accepted);
+        std::memcpy(m_pending_buffer.data(),
+                    int_staging + accepted * 2,
+                    remaining * 2 * sizeof(int16_t));
+        m_pending_frames = remaining;
+    }
+
+    if (!m_first_drain_logged)
+    {
+        FrontendLog(RETRO_LOG_INFO,
+            "LibretroAudioStream first drain: %u frames pushed (frontend accepted %zu)",
+            available, accepted);
+        m_first_drain_logged = true;
+    }
+
+    return static_cast<u32>(accepted);
 }
 
 } // namespace Pcsx2Libretro
