@@ -72,6 +72,61 @@ static bool InitializeImGuiFonts()
     return true;
 }
 
+// SP5: write hardcoded Pad1/Pad2 bindings into the MemorySettingsInterface.
+// Each entry maps a PadDualshock2 action name (Cross, LUp, +L2, ...) to a
+// LibretroInputSource binding string. The action names exactly match
+// PadDualshock2.cpp's s_bindings table (verified during SP5 implementation
+// plan step 1). Future SP7 makes these user-overridable.
+static void WriteDefaultPadBindings(MemorySettingsInterface& si)
+{
+    struct Entry
+    {
+        const char* action;       // PadDualshock2 action name
+        const char* libretro;     // LibretroInputSource binding name
+    };
+    static constexpr Entry kEntries[] = {
+        // Digital
+        {"Up",       "Up"},
+        {"Right",    "Right"},
+        {"Down",     "Down"},
+        {"Left",     "Left"},
+        {"Cross",    "Cross"},
+        {"Circle",   "Circle"},
+        {"Square",   "Square"},
+        {"Triangle", "Triangle"},
+        {"L1",       "L1"},
+        {"R1",       "R1"},
+        {"L2",       "+L2"},
+        {"R2",       "+R2"},
+        {"L3",       "L3"},
+        {"R3",       "R3"},
+        {"Start",    "Start"},
+        {"Select",   "Select"},
+        // Analog stick half-axes
+        {"LUp",    "-LeftY"},
+        {"LDown",  "+LeftY"},
+        {"LLeft",  "-LeftX"},
+        {"LRight", "+LeftX"},
+        {"RUp",    "-RightY"},
+        {"RDown",  "+RightY"},
+        {"RLeft",  "-RightX"},
+        {"RRight", "+RightX"},
+    };
+
+    for (u32 port = 0; port < 2; ++port)
+    {
+        const std::string section = "Pad" + std::to_string(port + 1);
+        // Ensure the controller type is DualShock 2; without this the
+        // bindings above won't match the section's input-binding table.
+        si.SetStringValue(section.c_str(), "Type", "DualShock2");
+        for (const auto& e : kEntries)
+        {
+            const std::string value = "Libretro-" + std::to_string(port) + "/" + e.libretro;
+            si.SetStringValue(section.c_str(), e.action, value.c_str());
+        }
+    }
+}
+
 void InitializeDefaults(const std::string& system_dir)
 {
     if (g_initialized)
@@ -189,14 +244,16 @@ void InitializeDefaults(const std::string& system_dir)
     g_si.SetBoolValue("Logging", "EnableTimestamps", false);
     g_si.SetBoolValue("Logging", "EnableVerbose", true);
 
-    // Disable input sources — SDL/XInput init during LoadSettings hangs
-    // when there's no real controller subsystem to attach to. SP5 (input)
-    // re-enables and wires retro_input_state_t to the PAD plugin.
-    // This matches gsrunner's pattern (gsrunner/Main.cpp:877-879).
+    // SP5: keep upstream sources off (SDL/XInput/DInput init hangs in the
+    // libretro process — no controller subsystem); enable our LibretroInputSource
+    // instead. PAD bindings written below route Libretro-N/* to Pad{N+1}/*.
     g_si.SetBoolValue("InputSources", "SDL", false);
     g_si.SetBoolValue("InputSources", "XInput", false);
     g_si.SetBoolValue("InputSources", "DInput", false);
     g_si.SetBoolValue("InputSources", "RawInput", false);
+    g_si.SetBoolValue("InputSources", "Libretro", true);
+
+    WriteDefaultPadBindings(g_si);
 
     // Disable memory cards (SP6 will wire these properly). Avoids file
     // sharing violations and unnecessary I/O during VM boot.
