@@ -98,6 +98,7 @@ void EmuThread::ThreadFunc(VMBootParameters params)
 
     // CPUThreadInitialize must precede any other VMManager call on the
     // CPU thread (gsrunner/Main.cpp:940).
+    FrontendLog(RETRO_LOG_INFO, "EmuThread: calling CPUThreadInitialize");
     if (!VMManager::Internal::CPUThreadInitialize())
     {
         FrontendLog(RETRO_LOG_ERROR, "VMManager::Internal::CPUThreadInitialize failed");
@@ -106,6 +107,13 @@ void EmuThread::ThreadFunc(VMBootParameters params)
         m_init_cv.notify_all();
         return;
     }
+    FrontendLog(RETRO_LOG_INFO, "EmuThread: CPUThreadInitialize succeeded");
+
+    // Apply settings after CPUThreadInitialize so the renderer / input-source
+    // overrides actually take effect before VM Initialize. Matches gsrunner
+    // pattern (gsrunner/Main.cpp:943).
+    VMManager::ApplySettings();
+    FrontendLog(RETRO_LOG_INFO, "EmuThread: calling VMManager::Initialize");
 
     Error err;
     const VMBootResult result = VMManager::Initialize(params, &err);

@@ -78,6 +78,25 @@ void InitializeDefaults(const std::string& system_dir)
     // Disable HostFS (we don't expose host filesystem to the VM).
     g_si.SetBoolValue("EmuCore", "HostFs", false);
 
+    // Disable input sources — SDL/XInput init during LoadSettings hangs
+    // when there's no real controller subsystem to attach to. SP5 (input)
+    // re-enables and wires retro_input_state_t to the PAD plugin.
+    // This matches gsrunner's pattern (gsrunner/Main.cpp:877-879).
+    g_si.SetBoolValue("InputSources", "SDL", false);
+    g_si.SetBoolValue("InputSources", "XInput", false);
+    g_si.SetBoolValue("InputSources", "DInput", false);
+    g_si.SetBoolValue("InputSources", "RawInput", false);
+
+    // Disable memory cards (SP6 will wire these properly). Avoids file
+    // sharing violations and unnecessary I/O during VM boot.
+    for (int i = 0; i < 2; ++i)
+    {
+        const std::string enable_key = "Slot" + std::to_string(i + 1) + "_Enable";
+        const std::string file_key   = "Slot" + std::to_string(i + 1) + "_Filename";
+        g_si.SetBoolValue("MemoryCards", enable_key.c_str(), false);
+        g_si.SetStringValue("MemoryCards", file_key.c_str(), "");
+    }
+
     // Apply the layered settings to the live Pcsx2Config.
     VMManager::Internal::LoadStartupSettings();
 
