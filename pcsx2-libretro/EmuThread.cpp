@@ -133,9 +133,15 @@ void EmuThread::ThreadFunc(VMBootParameters params)
     m_init_done.store(true);
     m_init_cv.notify_all();
 
-    // Blocks until VMManager::SetState(Stopping) is called from another
-    // thread (typically from RequestShutdown above).
-    VMManager::Execute();
+    // VMManager::Initialize leaves the VM in VMState::Paused. Without an
+    // explicit SetState(Running), Cpu->Execute() returns immediately
+    // because the state isn't Running. Mirrors gsrunner's pattern
+    // (gsrunner/Main.cpp:950-957): set Running, then loop Execute while
+    // the state stays Running. Execute can return for reasons other than
+    // Stopping (e.g. Resetting), so the while-loop is necessary.
+    VMManager::SetState(VMState::Running);
+    while (VMManager::GetState() == VMState::Running)
+        VMManager::Execute();
 
     FrontendLog(RETRO_LOG_INFO, "VMManager::Execute returned; shutting down VM");
     VMManager::Shutdown(false);
