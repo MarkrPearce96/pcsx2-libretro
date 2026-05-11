@@ -696,6 +696,7 @@ static std::array<const char*, static_cast<u32>(InputSourceType::Count)> s_input
 	"Keyboard",
 	"Mouse",
 	"SDL",
+	"Libretro", // pcsx2-libretro (SP5)
 #ifdef _WIN32
 	"DInput",
 	"XInput",
@@ -720,6 +721,9 @@ bool InputManager::GetInputSourceDefaultEnabled(InputSourceType type)
 		case InputSourceType::Pointer:
 		case InputSourceType::SDL:
 			return true;
+
+		case InputSourceType::Libretro: // pcsx2-libretro (SP5)
+			return false; // Off by default; enabled explicitly by the libretro shim's Settings.cpp.
 
 #ifdef _WIN32
 		case InputSourceType::DInput:
@@ -1788,6 +1792,10 @@ void InputManager::UpdateInputSourceState(SettingsInterface& si, std::unique_loc
 }
 
 #include "Input/SDLInputSource.h"
+// pcsx2-libretro (SP5) — LibretroInputSource lives outside the pcsx2/Input/ tree
+// because it's part of the libretro shim, but it's a peer of the upstream sources
+// from InputManager's perspective.
+#include "pcsx2-libretro/LibretroInputSource.h"
 
 #ifdef _WIN32
 #include "Input/DInputSource.h"
@@ -1797,6 +1805,8 @@ void InputManager::UpdateInputSourceState(SettingsInterface& si, std::unique_loc
 void InputManager::ReloadSources(SettingsInterface& si, std::unique_lock<std::mutex>& settings_lock)
 {
 	UpdateInputSourceState<SDLInputSource>(si, settings_lock, InputSourceType::SDL);
+	// pcsx2-libretro (SP5) — registers LibretroInputSource when InputSources/Libretro=true.
+	UpdateInputSourceState<Pcsx2Libretro::LibretroInputSource>(si, settings_lock, InputSourceType::Libretro);
 #ifdef _WIN32
 	UpdateInputSourceState<DInputSource>(si, settings_lock, InputSourceType::DInput);
 	UpdateInputSourceState<XInputSource>(si, settings_lock, InputSourceType::XInput);
