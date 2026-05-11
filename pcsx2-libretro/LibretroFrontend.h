@@ -32,4 +32,8 @@ extern FrontendState g_frontend;
 // libretro hosts can capture our log output.
 void FrontendLog(retro_log_level level, const char* fmt, ...);
 
+// Forward declaration of the emu-thread accessor defined in EmuThread.cpp.
+class EmuThread;
+EmuThread& GetEmuThread();
+
 } // namespace Pcsx2Libretro
