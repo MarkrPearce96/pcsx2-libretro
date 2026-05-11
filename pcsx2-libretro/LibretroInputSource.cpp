@@ -320,6 +320,7 @@ void LibretroInputSource::PollPort(u32 port)
         RETRO_DEVICE_INDEX_ANALOG_BUTTON, RETRO_DEVICE_ID_JOYPAD_R2);
     EmitAnalogEdges(port, new_analog);
 }
+
 void LibretroInputSource::EmitDigitalEdges(u32 port, uint16_t new_digital)
 {
     auto& cached = m_ports[port].prev_digital;
@@ -349,6 +350,7 @@ void LibretroInputSource::EmitDigitalEdges(u32 port, uint16_t new_digital)
 
     cached = new_digital;
 }
+
 void LibretroInputSource::EmitAnalogEdges(u32 port, const std::array<int16_t, NUM_ANALOG>& new_analog)
 {
     auto& cached = m_ports[port].prev_analog;
