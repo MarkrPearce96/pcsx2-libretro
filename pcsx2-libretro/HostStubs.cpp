@@ -32,6 +32,7 @@
 
 #include "common/ProgressCallback.h"
 #include "common/SmallString.h"
+#include "common/WindowInfo.h"
 
 #include "LibretroFrontend.h"
 #include "Settings.h"
@@ -70,162 +71,19 @@ void FrontendLog(retro_log_level level, const char* fmt, ...)
 } // namespace Pcsx2Libretro
 
 // ----------------------------------------------------------------------------
-// Active settings layer tracking.
-// ----------------------------------------------------------------------------
-
-namespace
-{
-    SettingsInterface* g_base_layer = nullptr;
-    SettingsInterface* g_secrets_layer = nullptr;
-    SettingsInterface* g_game_layer = nullptr;
-    SettingsInterface* g_input_layer = nullptr;
-    std::mutex g_settings_mutex;
-
-    SettingsInterface* ResolveSettings()
-    {
-        // Game layer takes precedence over base. Skeleton SP2 only uses base.
-        if (g_game_layer) return g_game_layer;
-        if (g_base_layer) return g_base_layer;
-        return nullptr;
-    }
-}
-
-// ----------------------------------------------------------------------------
 // Host:: stubs — required by the PCSX2 static library.
 // Implementations follow pcsx2-gsrunner/Main.cpp and
 // tests/ctest/core/StubHost.cpp as the canonical reference.
+//
+// Settings layer access (GetSettingsInterface, GetSettingsLock,
+// GetBase*SettingValue, SetBaseSettingsLayer, etc.) is intentionally
+// NOT overridden here. pcsx2/Host.cpp provides a correct implementation
+// via its internal LayeredSettingsInterface. Duplicating those symbols
+// here caused the LAYER_BASE pointer to be set in our local state while
+// GetBaseBoolSettingValue read from Host.cpp's LayeredSettingsInterface
+// (always null → SIGSEGV in CPUThreadInitialize). Letting Host.cpp own
+// the whole settings layer resolves the mismatch.
 // ----------------------------------------------------------------------------
-
-// ---------- Settings layer access (Host::Internal) ----------
-
-SettingsInterface* Host::Internal::GetBaseSettingsLayer()
-{
-    return g_base_layer;
-}
-
-SettingsInterface* Host::Internal::GetSecretsSettingsLayer()
-{
-    return g_secrets_layer;
-}
-
-SettingsInterface* Host::Internal::GetGameSettingsLayer()
-{
-    return g_game_layer;
-}
-
-SettingsInterface* Host::Internal::GetInputSettingsLayer()
-{
-    return g_input_layer;
-}
-
-void Host::Internal::SetBaseSettingsLayer(SettingsInterface* sif)
-{
-    std::scoped_lock lock(g_settings_mutex);
-    g_base_layer = sif;
-}
-
-void Host::Internal::SetSecretsSettingsLayer(SettingsInterface* sif)
-{
-    std::scoped_lock lock(g_settings_mutex);
-    g_secrets_layer = sif;
-}
-
-void Host::Internal::SetGameSettingsLayer(SettingsInterface* sif, std::unique_lock<std::mutex>& /*settings_lock*/)
-{
-    g_game_layer = sif;
-}
-
-void Host::Internal::SetInputSettingsLayer(SettingsInterface* sif, std::unique_lock<std::mutex>& /*settings_lock*/)
-{
-    g_input_layer = sif;
-}
-
-// ---------- Settings getters (routed through ResolveSettings) ----------
-
-std::string Host::GetStringSettingValue(const char* section, const char* key, const char* default_value)
-{
-    std::scoped_lock lock(g_settings_mutex);
-    SettingsInterface* si = ResolveSettings();
-    if (!si) return default_value ? std::string(default_value) : std::string();
-    return si->GetStringValue(section, key, default_value);
-}
-
-SmallString Host::GetSmallStringSettingValue(const char* section, const char* key, const char* default_value)
-{
-    std::scoped_lock lock(g_settings_mutex);
-    SettingsInterface* si = ResolveSettings();
-    if (!si) return SmallString(default_value ? default_value : "");
-    return si->GetSmallStringValue(section, key, default_value);
-}
-
-TinyString Host::GetTinyStringSettingValue(const char* section, const char* key, const char* default_value)
-{
-    std::scoped_lock lock(g_settings_mutex);
-    SettingsInterface* si = ResolveSettings();
-    if (!si) return TinyString(default_value ? default_value : "");
-    return si->GetTinyStringValue(section, key, default_value);
-}
-
-bool Host::GetBoolSettingValue(const char* section, const char* key, bool default_value)
-{
-    std::scoped_lock lock(g_settings_mutex);
-    SettingsInterface* si = ResolveSettings();
-    return si ? si->GetBoolValue(section, key, default_value) : default_value;
-}
-
-int Host::GetIntSettingValue(const char* section, const char* key, int default_value)
-{
-    std::scoped_lock lock(g_settings_mutex);
-    SettingsInterface* si = ResolveSettings();
-    return si ? si->GetIntValue(section, key, default_value) : default_value;
-}
-
-uint Host::GetUIntSettingValue(const char* section, const char* key, uint default_value)
-{
-    std::scoped_lock lock(g_settings_mutex);
-    SettingsInterface* si = ResolveSettings();
-    return si ? si->GetUIntValue(section, key, default_value) : default_value;
-}
-
-float Host::GetFloatSettingValue(const char* section, const char* key, float default_value)
-{
-    std::scoped_lock lock(g_settings_mutex);
-    SettingsInterface* si = ResolveSettings();
-    return si ? si->GetFloatValue(section, key, default_value) : default_value;
-}
-
-double Host::GetDoubleSettingValue(const char* section, const char* key, double default_value)
-{
-    std::scoped_lock lock(g_settings_mutex);
-    SettingsInterface* si = ResolveSettings();
-    return si ? si->GetDoubleValue(section, key, default_value) : default_value;
-}
-
-std::vector<std::string> Host::GetStringListSetting(const char* section, const char* key)
-{
-    std::scoped_lock lock(g_settings_mutex);
-    SettingsInterface* si = ResolveSettings();
-    if (!si) return {};
-    return si->GetStringList(section, key);
-}
-
-// ---------- Settings lock and interface access ----------
-
-std::unique_lock<std::mutex> Host::GetSettingsLock()
-{
-    return std::unique_lock<std::mutex>(g_settings_mutex);
-}
-
-std::unique_lock<std::mutex> Host::GetSecretsSettingsLock()
-{
-    // SP2: secrets layer is unused; share the same mutex.
-    return std::unique_lock<std::mutex>(g_settings_mutex);
-}
-
-SettingsInterface* Host::GetSettingsInterface()
-{
-    return ResolveSettings();
-}
 
 // ---------- Settings bookkeeping ----------
 
@@ -373,7 +231,11 @@ void Host::SetMouseLock(bool state)
 
 std::optional<WindowInfo> Host::AcquireRenderWindow(bool recreate_window)
 {
-    return std::nullopt;
+    // Return a surfaceless WindowInfo so PCSX2 can create a GS device without
+    // a real display window. Metal/Vulkan on macOS supports surfaceless rendering
+    // (off-screen). Returning nullopt causes the GS device creation to fail
+    // even with the Null renderer.
+    return WindowInfo{};  // default type == WindowInfo::Type::Surfaceless
 }
 
 void Host::ReleaseRenderWindow()
