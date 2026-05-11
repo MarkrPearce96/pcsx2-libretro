@@ -14,6 +14,7 @@ target_sources(pcsx2_libretro PRIVATE
     Settings.cpp
     EmuThread.cpp
     LibretroAudioStream.cpp
+    LibretroInputSource.cpp
 )
 
 target_include_directories(pcsx2_libretro PRIVATE
