@@ -136,8 +136,20 @@ bool LibretroInputSource::IsInitialized()
 
 void LibretroInputSource::PollEvents()
 {
-    // Real implementation in Task 5. Stub leaves controller dead but
-    // keeps the build valid.
+    if (!m_initialized)
+        return;
+
+    // Libretro spec: input_poll_cb must be called once per frame before any
+    // input_state_cb queries. RetroNest's trampoline is currently a no-op
+    // (state is updated independently), but other frontends rely on this.
+    if (g_frontend.input_poll_cb)
+        g_frontend.input_poll_cb();
+
+    if (!g_frontend.input_state_cb)
+        return;
+
+    for (u32 port = 0; port < NUM_PORTS; ++port)
+        PollPort(port);
 }
 
 std::optional<InputBindingKey> LibretroInputSource::ParseKeyString(
@@ -280,8 +292,94 @@ void LibretroInputSource::UpdateMotorState(InputBindingKey /*key*/, float /*inte
     // SP5: rumble deferred to SP5.5. Drop motor writes silently.
 }
 
-void LibretroInputSource::PollPort(u32 /*port*/) {}
-void LibretroInputSource::EmitDigitalEdges(u32 /*port*/, uint16_t /*new_digital*/) {}
-void LibretroInputSource::EmitAnalogEdges(u32 /*port*/, const std::array<int16_t, NUM_ANALOG>& /*new_analog*/) {}
+void LibretroInputSource::PollPort(u32 port)
+{
+    // Digital: query all 16 RETRO_DEVICE_ID_JOYPAD_* bits.
+    uint16_t new_digital = 0;
+    for (u32 i = 0; i < NUM_DIGITAL; ++i)
+    {
+        const int16_t v = g_frontend.input_state_cb(port, RETRO_DEVICE_JOYPAD, 0, i);
+        if (v)
+            new_digital |= (1u << i);
+    }
+    EmitDigitalEdges(port, new_digital);
+
+    // Analog: 4 stick axes + 2 analog triggers.
+    std::array<int16_t, NUM_ANALOG> new_analog{};
+    new_analog[ANALOG_LX] = g_frontend.input_state_cb(port, RETRO_DEVICE_ANALOG,
+        RETRO_DEVICE_INDEX_ANALOG_LEFT, RETRO_DEVICE_ID_ANALOG_X);
+    new_analog[ANALOG_LY] = g_frontend.input_state_cb(port, RETRO_DEVICE_ANALOG,
+        RETRO_DEVICE_INDEX_ANALOG_LEFT, RETRO_DEVICE_ID_ANALOG_Y);
+    new_analog[ANALOG_RX] = g_frontend.input_state_cb(port, RETRO_DEVICE_ANALOG,
+        RETRO_DEVICE_INDEX_ANALOG_RIGHT, RETRO_DEVICE_ID_ANALOG_X);
+    new_analog[ANALOG_RY] = g_frontend.input_state_cb(port, RETRO_DEVICE_ANALOG,
+        RETRO_DEVICE_INDEX_ANALOG_RIGHT, RETRO_DEVICE_ID_ANALOG_Y);
+    new_analog[ANALOG_L2] = g_frontend.input_state_cb(port, RETRO_DEVICE_ANALOG,
+        RETRO_DEVICE_INDEX_ANALOG_BUTTON, RETRO_DEVICE_ID_JOYPAD_L2);
+    new_analog[ANALOG_R2] = g_frontend.input_state_cb(port, RETRO_DEVICE_ANALOG,
+        RETRO_DEVICE_INDEX_ANALOG_BUTTON, RETRO_DEVICE_ID_JOYPAD_R2);
+    EmitAnalogEdges(port, new_analog);
+}
+void LibretroInputSource::EmitDigitalEdges(u32 port, uint16_t new_digital)
+{
+    auto& cached = m_ports[port].prev_digital;
+    const uint16_t changed = cached ^ new_digital;
+    if (changed == 0)
+        return;
+
+    for (u32 i = 0; i < NUM_DIGITAL; ++i)
+    {
+        const uint16_t mask = 1u << i;
+        if (!(changed & mask))
+            continue;
+
+        const float value = (new_digital & mask) ? 1.0f : 0.0f;
+        const InputBindingKey key = InputSource::MakeGenericControllerButtonKey(
+            InputSourceType::Libretro, port, static_cast<s32>(i));
+        InputManager::InvokeEvents(key, value);
+
+        if (!m_first_event_logged)
+        {
+            FrontendLog(RETRO_LOG_INFO,
+                "LibretroInputSource first event: port=%u key=Libretro-%u/%s value=%.3f",
+                port, port, kDigitalNames[i], static_cast<double>(value));
+            m_first_event_logged = true;
+        }
+    }
+
+    cached = new_digital;
+}
+void LibretroInputSource::EmitAnalogEdges(u32 port, const std::array<int16_t, NUM_ANALOG>& new_analog)
+{
+    auto& cached = m_ports[port].prev_analog;
+
+    for (u32 i = 0; i < NUM_ANALOG; ++i)
+    {
+        const int16_t v_new = new_analog[i];
+        const int16_t v_old = cached[i];
+        if (std::abs(static_cast<int>(v_new) - static_cast<int>(v_old)) < ANALOG_THRESHOLD)
+            continue;
+
+        // Normalize int16 to float in [-1.0, 1.0]. For trigger axes (L2, R2)
+        // the value is already in [0, 32767]; divide by 32767. For stick
+        // axes [-32768, 32767], clamp the divisor to 32767 to keep |value|<=1.
+        const float value = std::clamp(
+            static_cast<float>(v_new) / 32767.0f, -1.0f, 1.0f);
+
+        const InputBindingKey key = InputSource::MakeGenericControllerAxisKey(
+            InputSourceType::Libretro, port, static_cast<s32>(i));
+        InputManager::InvokeEvents(key, value);
+
+        cached[i] = v_new;
+
+        if (!m_first_event_logged && std::abs(value) > 0.01f)
+        {
+            FrontendLog(RETRO_LOG_INFO,
+                "LibretroInputSource first event: port=%u analog_idx=%u value=%.3f",
+                port, i, static_cast<double>(value));
+            m_first_event_logged = true;
+        }
+    }
+}
 
 } // namespace Pcsx2Libretro
