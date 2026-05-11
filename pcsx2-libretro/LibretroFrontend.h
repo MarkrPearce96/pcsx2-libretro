@@ -10,6 +10,10 @@
 
 #include "libretro.h"
 
+#include <atomic>
+#include <condition_variable>
+#include <mutex>
+
 namespace Pcsx2Libretro
 {
 
@@ -25,6 +29,11 @@ struct FrontendState
 };
 
 extern FrontendState g_frontend;
+
+// Frame-ready synchronization. Defined in HostStubs.cpp.
+extern std::mutex g_present_mutex;
+extern std::condition_variable g_present_cv;
+extern std::atomic<bool> g_present_ready;
 
 // Logging entry point used by HostStubs.cpp and LibretroFrontend.cpp.
 // Routes through g_frontend.log_cb if available, else fprintf(stderr).
