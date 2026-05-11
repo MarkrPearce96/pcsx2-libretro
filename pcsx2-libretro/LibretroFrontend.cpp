@@ -15,9 +15,12 @@
 #include "pcsx2/VMManager.h"
 
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <mutex>
 #include <string>
 
 using namespace Pcsx2Libretro;
@@ -128,7 +131,7 @@ RETRO_API void retro_get_system_info(struct retro_system_info* info)
     if (!info) return;
     std::memset(info, 0, sizeof(*info));
     info->library_name     = "PCSX2";
-    info->library_version  = "vm-0.1";  // bumped manually until phase 2 hooks up BuildVersion.cpp
+    info->library_version  = "video-0.1";  // bumped manually until phase 2 hooks up BuildVersion.cpp
     info->valid_extensions = "iso|chd|cso|bin|cue|m3u|gz";
     info->need_fullpath    = true;
     info->block_extract    = true;
@@ -160,11 +163,10 @@ RETRO_API void retro_reset(void)
 
 RETRO_API void retro_run(void)
 {
-    // SP2: no frame output. Observe state transitions and log once when
-    // the VM reaches Running with a non-zero CRC (proves the game booted).
     Pcsx2Libretro::EmuThread& emu = Pcsx2Libretro::GetEmuThread();
     if (!emu.IsRunning()) return;
 
+    // One-shot log when VM first reports Running with a non-zero CRC.
     if (!g_logged_running.load() && VMManager::GetState() == VMState::Running)
     {
         const u32 crc = VMManager::GetCurrentCRC();
@@ -177,6 +179,18 @@ RETRO_API void retro_run(void)
             g_logged_running.store(true);
         }
     }
+
+    // Frame-paced wait. PCSX2's MTGS thread signals g_present_cv from
+    // Host::BeginPresentFrame after each rendered frame. retro_run returns
+    // as soon as a frame is ready, so the host (RetroArch / RetroNest)
+    // drives ~60Hz cadence by calling us once per host frame.
+    //
+    // 100 ms timeout protects against VM hangs / Initialize-failed paths
+    // where Frame would never be signalled.
+    using namespace std::chrono_literals;
+    std::unique_lock<std::mutex> lock(g_present_mutex);
+    g_present_cv.wait_for(lock, 100ms, [] { return g_present_ready.load(); });
+    g_present_ready.store(false, std::memory_order_release);
 }
 
 RETRO_API size_t retro_serialize_size(void) { return 0; }

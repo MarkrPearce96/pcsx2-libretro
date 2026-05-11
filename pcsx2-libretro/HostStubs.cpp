@@ -37,6 +37,7 @@
 #include "LibretroFrontend.h"
 #include "Settings.h"
 
+#include <atomic>
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
@@ -49,6 +50,14 @@ namespace Pcsx2Libretro
 {
 
 FrontendState g_frontend{};
+
+// Frame-ready synchronization: PCSX2's MTGS thread calls
+// Host::BeginPresentFrame after each rendered frame is ready to display.
+// We signal this condition variable, and retro_run waits on it to drive
+// frame-paced execution.
+std::mutex g_present_mutex;
+std::condition_variable g_present_cv;
+std::atomic<bool> g_present_ready{false};
 
 void FrontendLog(retro_log_level level, const char* fmt, ...)
 {
@@ -229,13 +238,37 @@ void Host::SetMouseLock(bool state)
 // ---------- Render window ----------
 // No real window in the skeleton; these are never called until a VM boots.
 
-std::optional<WindowInfo> Host::AcquireRenderWindow(bool recreate_window)
+std::optional<WindowInfo> Host::AcquireRenderWindow(bool /*recreate_window*/)
 {
-    // Return a surfaceless WindowInfo so PCSX2 can create a GS device without
-    // a real display window. Metal/Vulkan on macOS supports surfaceless rendering
-    // (off-screen). Returning nullopt causes the GS device creation to fail
-    // even with the Null renderer.
-    return WindowInfo{};  // default type == WindowInfo::Type::Surfaceless
+    if (!Pcsx2Libretro::g_frontend.environ_cb)
+    {
+        Pcsx2Libretro::FrontendLog(RETRO_LOG_ERROR, "AcquireRenderWindow: no environ_cb available");
+        return std::nullopt;
+    }
+
+    void* ns_view = nullptr;
+    // RETRONEST_ENVIRONMENT_GET_MACOS_NSVIEW = 1 | RETRO_ENVIRONMENT_PRIVATE (0x20000)
+    // Hardcoded to avoid a cross-repo header dependency; documented here so a future
+    // reader knows it matches RETRO_ENVIRONMENT_PRIVATE from the libretro header.
+    static constexpr unsigned RETRONEST_ENVIRONMENT_GET_MACOS_NSVIEW = (1 | 0x20000);
+    if (!Pcsx2Libretro::g_frontend.environ_cb(RETRONEST_ENVIRONMENT_GET_MACOS_NSVIEW, &ns_view) || !ns_view)
+    {
+        Pcsx2Libretro::FrontendLog(RETRO_LOG_ERROR,
+            "AcquireRenderWindow: host did not provide an NSView (env command failed). "
+            "RetroNest must instantiate LibretroMetalItem and register its NSView before retro_load_game.");
+        return std::nullopt;
+    }
+
+    Pcsx2Libretro::FrontendLog(RETRO_LOG_INFO, "AcquireRenderWindow: got NSView=%p", ns_view);
+
+    WindowInfo wi{};
+    wi.type = WindowInfo::Type::MacOS;
+    wi.window_handle = ns_view;
+    wi.surface_width = 640;
+    wi.surface_height = 448;
+    wi.surface_scale = 1.0f;
+    wi.surface_refresh_rate = 60.0f;
+    return wi;
 }
 
 void Host::ReleaseRenderWindow()
@@ -244,6 +277,13 @@ void Host::ReleaseRenderWindow()
 
 void Host::BeginPresentFrame()
 {
+    // PCSX2's MTGS thread calls this immediately before presenting a frame.
+    // Signal retro_run so it can return one frame's worth of work.
+    {
+        std::scoped_lock lock(Pcsx2Libretro::g_present_mutex);
+        Pcsx2Libretro::g_present_ready.store(true, std::memory_order_release);
+    }
+    Pcsx2Libretro::g_present_cv.notify_one();
 }
 
 void Host::RequestResizeHostDisplay(s32 width, s32 height)
