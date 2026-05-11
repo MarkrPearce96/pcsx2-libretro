@@ -7,11 +7,15 @@
 #include "LibretroFrontend.h"
 
 #include "common/Error.h"
+#include "common/FileSystem.h"
 #include "common/MemorySettingsInterface.h"
 #include "pcsx2/Host.h"
+#include "pcsx2/ImGui/ImGuiManager.h"
 #include "pcsx2/VMManager.h"
 
 #include "libretro.h"
+
+#include <vector>
 
 namespace Pcsx2Libretro::Settings
 {
@@ -19,6 +23,53 @@ namespace
 {
     MemorySettingsInterface g_si;
     bool g_initialized = false;
+
+    // Lives for the process lifetime. ImGuiManager::FontInfo holds a
+    // std::span<const u8> into this buffer, and ImGui's font atlas is
+    // configured with FontDataOwnedByAtlas=false (see ImGuiManager::AddTextFont),
+    // so this vector must outlive the libretro core's ImGui usage. We never
+    // free it — same approach gsrunner uses (it just leaks until process exit).
+    std::vector<u8> g_roboto_font_bytes;
+}
+
+// Mirror of pcsx2-gsrunner/Main.cpp's InitializeConfig font-setup block.
+// Without this, ImGuiManager::AddTextFont returns nullptr (s_font_info is
+// empty) and AddImGuiFonts → "Failed to create ImGui font texture" →
+// VMManager::Initialize fails with "Failed to initialize GS." Loads
+// Roboto-Regular.ttf from EmuFolders::Resources and registers it as the
+// sole standard text font.
+static bool InitializeImGuiFonts()
+{
+    if (!g_roboto_font_bytes.empty())
+        return true; // already loaded by a prior call
+
+    const std::string roboto_path =
+        EmuFolders::GetOverridableResourcePath(
+            "fonts" FS_OSPATH_SEPARATOR_STR "Roboto-Regular.ttf");
+
+    auto data = FileSystem::ReadBinaryFile(roboto_path.c_str());
+    if (!data.has_value())
+    {
+        FrontendLog(RETRO_LOG_ERROR,
+            "Failed to load Roboto-Regular.ttf from '%s' — ImGui init will fail.",
+            roboto_path.c_str());
+        return false;
+    }
+
+    g_roboto_font_bytes = std::move(data.value());
+
+    std::vector<ImGuiManager::FontInfo> fonts;
+    ImGuiManager::FontInfo fi{};
+    fi.data = std::span<const u8>(g_roboto_font_bytes);
+    fi.exclude_ranges = {};
+    fi.face_name = nullptr;
+    fi.is_emoji_font = false;
+    fonts.push_back(fi);
+
+    ImGuiManager::SetFonts(std::move(fonts));
+    FrontendLog(RETRO_LOG_INFO, "ImGui fonts registered (%zu bytes from %s)",
+                g_roboto_font_bytes.size(), roboto_path.c_str());
+    return true;
 }
 
 void InitializeDefaults(const std::string& system_dir)
@@ -58,6 +109,17 @@ void InitializeDefaults(const std::string& system_dir)
                 "EmuFolders::SetDataDirectory failed: %s — continuing anyway",
                 err.GetDescription().c_str());
         }
+    }
+
+    // Load Roboto-Regular.ttf and hand it to ImGuiManager. Must run after
+    // EmuFolders::Resources is finalised (above) and before VMManager init
+    // (which downstream triggers ImGuiManager::Initialize → AddImGuiFonts).
+    // If this fails, GS init will still try and fail with the documented
+    // "Failed to create ImGui font texture" error.
+    if (!InitializeImGuiFonts())
+    {
+        FrontendLog(RETRO_LOG_ERROR,
+            "ImGui font loading failed — VM init will fail at GS device creation");
     }
 
     // Register our MemorySettingsInterface as PCSX2's base settings layer
