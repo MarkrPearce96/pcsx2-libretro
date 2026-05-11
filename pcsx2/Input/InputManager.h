@@ -24,6 +24,7 @@ enum class InputSourceType : u32
 	Keyboard,
 	Pointer,
 	SDL,
+	Libretro, // pcsx2-libretro: read by LibretroInputSource (SP5)
 #ifdef _WIN32
 	DInput,
 	XInput,
