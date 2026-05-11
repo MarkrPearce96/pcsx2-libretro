@@ -11,6 +11,8 @@ add_library(pcsx2_libretro MODULE)
 target_sources(pcsx2_libretro PRIVATE
     LibretroFrontend.cpp
     HostStubs.cpp
+    Settings.cpp
+    EmuThread.cpp
 )
 
 target_include_directories(pcsx2_libretro PRIVATE
