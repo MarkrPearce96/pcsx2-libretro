@@ -32,7 +32,12 @@ LibretroAudioStream::LibretroAudioStream(u32 sample_rate, const AudioStreamParam
     : AudioStream(sample_rate, parameters)
 {
     // expansion_mode is forced to Disabled by Settings.cpp — verify here.
-    pxAssert(parameters.expansion_mode == AudioExpansionMode::Disabled);
+    // Use pxAssertRel (not pxAssert) so the check survives in Release builds:
+    // a violated invariant here corrupts audio (multichannel frames pumped
+    // into a stereo libretro callback) rather than crashing, so silent
+    // failure in production is the worst outcome.
+    pxAssertRel(parameters.expansion_mode == AudioExpansionMode::Disabled,
+        "LibretroAudioStream requires expansion_mode == Disabled (stereo only)");
 
     // Stereo path uses StereoSampleReaderImpl directly. stretch_enabled is
     // wired through by CreateLibretroAudioStream below.
