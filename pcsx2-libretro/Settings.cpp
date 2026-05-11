@@ -235,14 +235,22 @@ void InitializeDefaults(const std::string& system_dir)
     // Disable HostFS (we don't expose host filesystem to the VM).
     g_si.SetBoolValue("EmuCore", "HostFs", false);
 
-    // Enable system console + verbose logging so PCSX2's Console.WriteLn /
-    // Console.Error output reaches our stderr (captured by RetroNest's log
-    // file). Without this, internal PCSX2 diagnostics during GS device
-    // creation / VM boot are invisible, making it impossible to diagnose
-    // failures. Matches gsrunner's pattern (gsrunner/Main.cpp:889-891).
+    // Perf: enable Multi-Threaded VU1 so VU1 work runs on its own thread
+    // instead of saturating the EE thread. Apple Silicon's EE thread alone
+    // can't reach 60fps for VU-heavy games (R&C 2 measured at 65% VM speed
+    // with vu thread at 0%); MTVU is compatible with the vast majority of
+    // games and is the standard "did you try MTVU?" perf knob in PCSX2.
+    g_si.SetBoolValue("EmuCore/Speedhacks", "vuThread", true);
+
+    // System console routes Console.WriteLn / Console.Error to stderr.
+    // EnableVerbose was previously on to surface diagnostics during SP1-SP4
+    // bring-up, but it forces LOGLEVEL_DEV which makes every DevCon.Warning()
+    // in PCSX2's DMA/VIF/MTGS hot paths issue a blocking write(fd, ...) syscall
+    // on the EE thread — measured ~10-20% emulation-speed regression. Keep
+    // system console on for FATAL/ERROR/WARN routing; turn verbose off for perf.
     g_si.SetBoolValue("Logging", "EnableSystemConsole", true);
     g_si.SetBoolValue("Logging", "EnableTimestamps", false);
-    g_si.SetBoolValue("Logging", "EnableVerbose", true);
+    g_si.SetBoolValue("Logging", "EnableVerbose", false);
 
     // SP5: keep upstream sources off (SDL/XInput/DInput init hangs in the
     // libretro process — no controller subsystem); enable our LibretroInputSource
