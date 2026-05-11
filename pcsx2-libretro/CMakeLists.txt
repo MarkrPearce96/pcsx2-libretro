@@ -6,14 +6,6 @@
 # Modeled on pcsx2-gsrunner/CMakeLists.txt — same minimal shape, but
 # produces a MODULE library (loadable plugin) rather than an executable.
 
-# Mark sources as GENERATED so CMake 4.x does not check existence at configure
-# time — LibretroFrontend.cpp and HostStubs.cpp are added by Tasks 5-7.
-set_source_files_properties(
-    LibretroFrontend.cpp
-    HostStubs.cpp
-    PROPERTIES GENERATED TRUE
-)
-
 add_library(pcsx2_libretro MODULE)
 
 target_sources(pcsx2_libretro PRIVATE
