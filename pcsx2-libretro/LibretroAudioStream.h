@@ -16,6 +16,9 @@
 
 #pragma once
 
+#include <array>
+#include <cstdint>
+
 #include "pcsx2/Host/AudioStream.h"
 #include "libretro.h"
 
@@ -25,6 +28,12 @@ namespace Pcsx2Libretro
 class LibretroAudioStream final : public ::AudioStream
 {
 public:
+    // Maximum stereo frames drained per DrainToLibretroCallback call.
+    // Sized comfortably above one video-frame's worth of audio at 48 kHz
+    // (~800 frames at 60 fps). Public so retro_run can reference it
+    // symbolically instead of duplicating the value.
+    static constexpr u32 MAX_FRAMES_PER_DRAIN = 2048;
+
     LibretroAudioStream(u32 sample_rate, const AudioStreamParameters& parameters);
     ~LibretroAudioStream() override;
 
@@ -42,12 +51,8 @@ public:
     static LibretroAudioStream* ActiveStream();
 
 private:
-    // Used by DrainToLibretroCallback to retry frames the frontend didn't
-    // consume on the previous call.
-    static constexpr u32 MAX_FRAMES_PER_DRAIN = 2048;
-
     u32 m_pending_frames = 0;
-    int16_t m_pending_buffer[MAX_FRAMES_PER_DRAIN * 2] = {};
+    std::array<int16_t, MAX_FRAMES_PER_DRAIN * 2> m_pending_buffer = {};
 
     // One-shot diagnostic latch.
     bool m_first_drain_logged = false;
