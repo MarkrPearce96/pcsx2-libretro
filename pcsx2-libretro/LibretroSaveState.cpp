@@ -217,6 +217,14 @@ bool BuildZipIntoSink(MemoryWriteSink& sink)
     {
         const ArchiveEntry& e = (*srclist)[i];
 
+        // Mirror upstream SaveState_AddToZip (pcsx2/SaveState.cpp:1016):
+        // zero-byte entries (e.g. optional SavestateEntry_USB when USB
+        // emulation is off) are skipped so the zip doesn't carry empty
+        // files that SysState_ComponentFreezeIn would then read as a
+        // zero-byte zip_fread on load.
+        if (e.GetDataSize() == 0)
+            continue;
+
         zip_source_t* es = zip_source_buffer(zf, base + e.GetDataIndex(), e.GetDataSize(), /*freep=*/0);
         if (!es)
         {
@@ -255,7 +263,6 @@ bool BuildZipIntoSink(MemoryWriteSink& sink)
         return false;
     }
 
-    // The version-indicator entry that SaveState_UnzipFromZip
     // The version-indicator entry that SaveState_UnzipFromZip
     // expects (CheckVersion reads "PCSX2 Savestate Version.id").
     // Format matches SaveState_AddToZip at pcsx2/SaveState.cpp:976-1010.
