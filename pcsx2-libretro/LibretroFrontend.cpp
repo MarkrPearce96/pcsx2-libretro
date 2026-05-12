@@ -19,6 +19,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <mutex>
@@ -149,6 +150,13 @@ RETRO_API void retro_get_system_av_info(struct retro_system_av_info* info)
     info->geometry.aspect_ratio = 4.0f / 3.0f;
     info->timing.fps            = 60.0;       // placeholder — phase 3 will derive from GS region
     info->timing.sample_rate    = 48000.0;
+
+    if (std::getenv("RETRONEST_AUDIO_TRACE"))
+    {
+        FrontendLog(RETRO_LOG_INFO,
+            "[AUDIO_TRACE] av_info fps=%.4f sample_rate=%.0f",
+            info->timing.fps, info->timing.sample_rate);
+    }
 }
 
 RETRO_API void retro_set_controller_port_device(unsigned port, unsigned device)
@@ -222,11 +230,29 @@ RETRO_API void retro_run(void)
     {
         if (g_frontend.audio_batch_cb)
         {
-            // Drain everything currently buffered, capped at MAX_FRAMES_PER_DRAIN
-            // (2048 stereo frames = 42 ms @ 48 kHz, comfortably bounds one frame's
-            // worth of audio at any reasonable host fps).
+            // SP4.x fix: drain ONE host-frame's worth of audio per retro_run.
+            //
+            // Originally we passed MAX_FRAMES_PER_DRAIN (2048). At a 60Hz host
+            // cadence that's 122 880 samples/sec pushed into the frontend, but
+            // the device only plays back at 48 000/sec — the queue grows at
+            // 1.5 s of audio per real second, so audio drifts minutes behind
+            // picture within a few minutes of play.
+            //
+            // PCSX2's audio-sync framelimiter (via SoundTouch) tracks the
+            // consumer rate of this callback. Feeding it ~800 frames per call
+            // (= sample_rate / host_fps) tells the framelimiter "consumer
+            // wants 48 kHz", and emulation self-throttles to produce that
+            // exact rate. Steady state: ring buffer stays small, SDL queue
+            // stays bounded near zero, audio stays in sync with video.
+            //
+            // 800 = av.timing.sample_rate / av.timing.fps. Both are currently
+            // hardcoded in retro_get_system_av_info; once that derives fps
+            // from the GS region (SP4.x M4), this should derive too.
+            // MAX_FRAMES_PER_DRAIN still bounds the pending-buffer staging
+            // size — only the per-call drain target changes.
+            constexpr u32 frames_per_host_frame = 48000 / 60;
             stream->DrainToLibretroCallback(g_frontend.audio_batch_cb,
-                Pcsx2Libretro::LibretroAudioStream::MAX_FRAMES_PER_DRAIN);
+                frames_per_host_frame);
         }
     }
 }
