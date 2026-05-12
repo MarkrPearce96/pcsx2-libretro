@@ -156,7 +156,7 @@ void InitializeDefaults(const std::string& system_dir,
     // or have RetroNest copy these resources into a location adjacent
     // to the dylib at install time.
     EmuFolders::Resources =
-        "/Users/mark/Documents/Projects/Pcsx2 Experiment /pcsx2-master/bin/resources";
+        "/Users/mark/Documents/Projects/pcsx2-libretro/bin/resources";
     {
         Error err;
         if (!EmuFolders::SetDataDirectory(&err))
@@ -202,7 +202,7 @@ void InitializeDefaults(const std::string& system_dir,
     // to find its on-disk location, then a known relative offset), or
     // have RetroNest copy these resources next to the dylib at install time.
     g_si.SetStringValue("Folders", "Resources",
-        "/Users/mark/Documents/Projects/Pcsx2 Experiment /pcsx2-master/bin/resources");
+        "/Users/mark/Documents/Projects/pcsx2-libretro/bin/resources");
 
     // SP3: switched from Null (11) to Auto (-1). The Null renderer was
     // appropriate in SP2 when we had no display surface. SP3 provides a
