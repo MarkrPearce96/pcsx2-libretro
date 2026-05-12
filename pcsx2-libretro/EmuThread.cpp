@@ -13,6 +13,7 @@
 #include "libretro.h"
 
 #include <chrono>
+#include <thread>
 
 namespace Pcsx2Libretro
 {
@@ -194,9 +195,10 @@ void EmuThread::ThreadFunc(VMBootParameters params)
     // VMManager::Initialize leaves the VM in VMState::Paused. Without an
     // explicit SetState(Running), Cpu->Execute() returns immediately
     // because the state isn't Running. Mirrors gsrunner's pattern
-    // (gsrunner/Main.cpp:950-957): set Running, then loop Execute while
-    // the state stays Running. Execute can return for reasons other than
-    // Stopping (e.g. Resetting), so the while-loop is necessary.
+    // (gsrunner/Main.cpp:950-957): set Running, then loop Execute. The
+    // loop is necessary because VMManager::Execute returns on any
+    // non-Running transition (Resetting, Paused — see VMManager.cpp:2756
+    // → Cpu->Execute), not only terminal states.
     //
     // SP3.5 Phase 2: check m_stop_requested BEFORE each Execute call.
     // If set, transition to Stopping from this thread (the only thread
@@ -205,13 +207,32 @@ void EmuThread::ThreadFunc(VMBootParameters params)
     // graceful stop is ~one frame (~16 ms at 60 Hz). Matches pcsx2-qt's
     // EmuThread::run() pattern where shutdownVM is queued to the emu
     // thread via QMetaObject::invokeMethod(Qt::QueuedConnection).
+    //
+    // SP6.5 prep: the loop exit condition was `state == Running`, which
+    // mistreated VMState::Paused (set by SP6.5's WaitForVmPaused
+    // save-state handshake) as a shutdown signal — Cpu->Execute returns
+    // on pause, loop exit fires, VMManager::Shutdown runs, and the save
+    // never gets to write through a live VM. Loop now exits only on
+    // Stopping/Shutdown; Paused sleeps briefly then re-checks (the
+    // save-state caller flips state back to Running and the next Execute
+    // resumes the EE thread). Resetting is treated like Running — re-
+    // enter Execute, which handles the reset internally and returns once
+    // state stabilizes.
     VMManager::SetState(VMState::Running);
-    while (VMManager::GetState() == VMState::Running)
+    while (true)
     {
         if (m_stop_requested.load(std::memory_order_acquire))
         {
             VMManager::SetState(VMState::Stopping);
             break;
+        }
+        const VMState s = VMManager::GetState();
+        if (s == VMState::Stopping || s == VMState::Shutdown)
+            break;
+        if (s == VMState::Paused)
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            continue;
         }
         VMManager::Execute();
     }
