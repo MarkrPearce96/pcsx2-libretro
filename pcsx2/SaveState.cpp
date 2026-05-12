@@ -1172,27 +1172,18 @@ static bool LoadInternalStructuresState(zip_t* zf, s64 index, Error* error)
 	return true;
 }
 
-bool SaveState_UnzipFromDisk(const std::string& filename, Error* error)
+// pcsx2-libretro: SP6.5 — extracted from SaveState_UnzipFromDisk so the new
+// SaveState_UnzipFromMemory can share the same CheckVersion + per-entry
+// existence check + PreLoadPrep + LoadInternalStructuresState +
+// per-entry FreezeIn + PostLoadPrep flow without duplication.
+static bool SaveState_UnzipFromZip(zip_t* zf, const std::string& filename_for_log, Error* error)
 {
-	zip_error_t ze = {};
-	auto zf = zip_open_managed(filename.c_str(), ZIP_RDONLY, &ze);
-	if (!zf)
-	{
-		Console.Error("Failed to open zip file '%s' for save state load: %s", filename.c_str(), zip_error_strerror(&ze));
-		if (zip_error_code_zip(&ze) == ZIP_ER_NOENT)
-			Error::SetString(error, "Savestate file does not exist.");
-		else
-			Error::SetString(error, fmt::format("Savestate zip error: {}", zip_error_strerror(&ze)));
-
-		return false;
-	}
-
 	// look for version and screenshot information in the zip stream:
-	if (!CheckVersion(filename, zf.get(), error))
+	if (!CheckVersion(filename_for_log, zf, error))
 		return false;
 
 	// check that all parts are included
-	const s64 internal_index = CheckFileExistsInState(zf.get(), EntryFilename_InternalStructures, true);
+	const s64 internal_index = CheckFileExistsInState(zf, EntryFilename_InternalStructures, true);
 	s64 entryIndices[std::size(SavestateEntries)];
 
 	// Log any parts and pieces that are missing, and then generate an exception.
@@ -1200,7 +1191,7 @@ bool SaveState_UnzipFromDisk(const std::string& filename, Error* error)
 	for (u32 i = 0; i < std::size(SavestateEntries); i++)
 	{
 		const bool required = SavestateEntries[i]->IsRequired();
-		entryIndices[i] = CheckFileExistsInState(zf.get(), SavestateEntries[i]->GetFilename(), required);
+		entryIndices[i] = CheckFileExistsInState(zf, SavestateEntries[i]->GetFilename(), required);
 		if (entryIndices[i] < 0 && required)
 		{
 			allPresent = false;
@@ -1215,7 +1206,7 @@ bool SaveState_UnzipFromDisk(const std::string& filename, Error* error)
 
 	PreLoadPrep();
 
-	if (!LoadInternalStructuresState(zf.get(), internal_index, error))
+	if (!LoadInternalStructuresState(zf, internal_index, error))
 	{
 		if (!error->IsValid())
 			Error::SetString(error, "Save state corruption in internal structures.");
@@ -1232,7 +1223,7 @@ bool SaveState_UnzipFromDisk(const std::string& filename, Error* error)
 			continue;
 		}
 
-		auto zff = zip_fopen_index_managed(zf.get(), entryIndices[i], 0);
+		auto zff = zip_fopen_index_managed(zf, entryIndices[i], 0);
 		if (!zff || !SavestateEntries[i]->FreezeIn(zff.get()))
 		{
 			Error::SetString(error, fmt::format("Save state corruption in {}.", SavestateEntries[i]->GetFilename()));
@@ -1243,6 +1234,54 @@ bool SaveState_UnzipFromDisk(const std::string& filename, Error* error)
 
 	PostLoadPrep();
 	return true;
+}
+
+bool SaveState_UnzipFromDisk(const std::string& filename, Error* error)
+{
+	zip_error_t ze = {};
+	auto zf = zip_open_managed(filename.c_str(), ZIP_RDONLY, &ze);
+	if (!zf)
+	{
+		Console.Error("Failed to open zip file '%s' for save state load: %s", filename.c_str(), zip_error_strerror(&ze));
+		if (zip_error_code_zip(&ze) == ZIP_ER_NOENT)
+			Error::SetString(error, "Savestate file does not exist.");
+		else
+			Error::SetString(error, fmt::format("Savestate zip error: {}", zip_error_strerror(&ze)));
+
+		return false;
+	}
+
+	// pcsx2-libretro: SP6.5 — delegate to the shared zip-body helper.
+	return SaveState_UnzipFromZip(zf.get(), filename, error);
+}
+
+// pcsx2-libretro: SP6.5 — in-memory variant of SaveState_UnzipFromDisk.
+// Used by the libretro core (pcsx2-libretro/LibretroSaveState.cpp) to drive
+// the canonical load flow from a buffer the libretro frontend hands us
+// during retro_unserialize. Shares the entire downstream load body with
+// SaveState_UnzipFromDisk via SaveState_UnzipFromZip — see comment on
+// that helper above.
+//
+// Buffer lifetime: caller owns `buf`. zip_open_buffer_managed takes a
+// non-owning view (freep=0). The returned unique_ptr's deleter closes
+// the zip (via zip_close, falling back to zip_discard on close failure).
+bool SaveState_UnzipFromMemory(const void* buf, size_t size, Error* error)
+{
+	if (!buf || size == 0)
+	{
+		Error::SetString(error, "Savestate memory buffer is empty.");
+		return false;
+	}
+
+	zip_error_t ze = {};
+	auto zf = zip_open_buffer_managed(buf, size, ZIP_RDONLY, /*freep=*/0, &ze);
+	if (!zf)
+	{
+		Error::SetString(error, fmt::format("Savestate zip_open_from_source failed: {}", zip_error_strerror(&ze)));
+		return false;
+	}
+
+	return SaveState_UnzipFromZip(zf.get(), "<memory>", error);
 }
 
 void SaveState_ReportLoadErrorOSD(const std::string& message, std::optional<s32> slot, bool backup)
