@@ -90,6 +90,25 @@ std::string GetSystemDirectory()
     return s_cached;
 }
 
+// Returns the libretro save directory, or empty string if the host
+// does not provide one. Cached after first call.
+std::string GetSaveDirectory()
+{
+    static std::string s_cached;
+    static bool s_resolved = false;
+    if (s_resolved) return s_cached;
+
+    const char* dir = nullptr;
+    if (g_frontend.environ_cb &&
+        g_frontend.environ_cb(RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY, &dir) &&
+        dir != nullptr)
+    {
+        s_cached = dir;
+    }
+    s_resolved = true;
+    return s_cached;
+}
+
 // Atomic, used by retro_run to log VM state transitions only once.
 std::atomic<bool> g_logged_running{false};
 
@@ -349,7 +368,8 @@ RETRO_API bool retro_load_game(const struct retro_game_info* game)
     FrontendLog(RETRO_LOG_INFO, "Found PS2 BIOS: %s", bios_path.c_str());
 
     // 2. Populate the in-memory settings layer.
-    Pcsx2Libretro::Settings::InitializeDefaults(system_dir);
+    const std::string save_dir = GetSaveDirectory();
+    Pcsx2Libretro::Settings::InitializeDefaults(system_dir, save_dir);
 
     // 3. Build VMBootParameters and start the emu thread.
     VMBootParameters params{};

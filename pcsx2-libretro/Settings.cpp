@@ -127,7 +127,8 @@ static void WriteDefaultPadBindings(MemorySettingsInterface& si)
     }
 }
 
-void InitializeDefaults(const std::string& system_dir)
+void InitializeDefaults(const std::string& system_dir,
+                        const std::string& save_dir)
 {
     if (g_initialized)
     {
@@ -263,15 +264,36 @@ void InitializeDefaults(const std::string& system_dir)
 
     WriteDefaultPadBindings(g_si);
 
-    // Disable memory cards (SP6 will wire these properly). Avoids file
-    // sharing violations and unnecessary I/O during VM boot.
-    for (int i = 0; i < 2; ++i)
+    // SP6: configure memory cards.
+    //
+    // Slot 1: enabled, file-image type, "Mcd001.ps2" (PCSX2 standard).
+    //   PCSX2 auto-detects MemoryCardType::File from the .ps2 extension
+    //   at MemoryCardFile.cpp load time, and auto-creates the file on
+    //   first save. No Slot1_Type key needed.
+    //
+    // Slot 2: disabled. Single-slot is the libretro convention; SP7
+    //   settings UI may expose a toggle later.
+    //
+    // Folders/MemoryCards: rooted at libretro save_dir so each
+    //   {game_id}/ scope gets its own memcard image (RetroNest's
+    //   adapter is responsible for the per-game scoping in save_dir).
+    //   Empty save_dir falls back to PCSX2's default ("memcards"
+    //   under DataRoot) — usable but not per-game-isolated.
+    if (!save_dir.empty())
     {
-        const std::string enable_key = "Slot" + std::to_string(i + 1) + "_Enable";
-        const std::string file_key   = "Slot" + std::to_string(i + 1) + "_Filename";
-        g_si.SetBoolValue("MemoryCards", enable_key.c_str(), false);
-        g_si.SetStringValue("MemoryCards", file_key.c_str(), "");
+        const std::string memcards_dir = save_dir + "/memcards";
+        g_si.SetStringValue("Folders", "MemoryCards", memcards_dir.c_str());
     }
+    else
+    {
+        FrontendLog(RETRO_LOG_WARN,
+            "Host did not provide save_dir — memcards will use PCSX2 default location");
+    }
+
+    g_si.SetBoolValue  ("MemoryCards", "Slot1_Enable",   true);
+    g_si.SetStringValue("MemoryCards", "Slot1_Filename", "Mcd001.ps2");
+    g_si.SetBoolValue  ("MemoryCards", "Slot2_Enable",   false);
+    g_si.SetStringValue("MemoryCards", "Slot2_Filename", "Mcd002.ps2");
 
     // Apply the layered settings to the live Pcsx2Config.
     VMManager::Internal::LoadStartupSettings();

@@ -27,7 +27,8 @@ namespace Pcsx2Libretro::Settings
 //
 // system_dir: the libretro system directory (where BIOS lives), obtained
 // from RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY.
-void InitializeDefaults(const std::string& system_dir);
+void InitializeDefaults(const std::string& system_dir,
+                        const std::string& save_dir);
 
 // Access the populated settings interface. Returns nullptr before
 // InitializeDefaults has been called. Pointer is stable for the
