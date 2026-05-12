@@ -28,7 +28,6 @@
 #include "pcsx2/ImGui/ImGuiFullscreen.h"
 #include "pcsx2/ImGui/ImGuiManager.h"
 #include "pcsx2/Input/InputManager.h"
-#include "pcsx2/PerformanceMetrics.h"
 #include "pcsx2/VMManager.h"
 
 #include "common/ProgressCallback.h"
@@ -39,7 +38,6 @@
 #include "Settings.h"
 
 #include <atomic>
-#include <chrono>
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
@@ -328,24 +326,8 @@ void Host::OnGameChanged(const std::string& title, const std::string& elf_overri
 {
 }
 
-// pcsx2-libretro SP10 transient diagnostic — emits speed/FPS/thread% to
-// stderr once per second so SP10's three-way perf comparison (native arm64
-// libretro vs Rosetta x86_64 libretro vs standalone PCSX2 v2.6.3) can
-// capture comparable measurements. Revert after measurements are in.
 void Host::OnPerformanceMetricsUpdated()
 {
-	static auto last = std::chrono::steady_clock::now();
-	auto now = std::chrono::steady_clock::now();
-	if (std::chrono::duration_cast<std::chrono::milliseconds>(now - last).count() < 1000)
-		return;
-	last = now;
-	std::fprintf(stderr,
-		"[pcsx2-libretro perf] speed=%.1f%% fps=%.1f cpu=%.1f%% gs=%.1f%% vu=%.1f%%\n",
-		PerformanceMetrics::GetSpeed(),
-		PerformanceMetrics::GetFPS(),
-		PerformanceMetrics::GetCPUThreadUsage(),
-		PerformanceMetrics::GetGSThreadUsage(),
-		PerformanceMetrics::GetVUThreadUsage());
 }
 
 void Host::OnSaveStateLoading(const std::string_view filename)
