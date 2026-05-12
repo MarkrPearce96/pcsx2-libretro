@@ -473,6 +473,39 @@ bool Serialize(void* dst, size_t len)
     return ok;
 }
 
-bool Unserialize(const void* /*src*/, size_t /*len*/) { return false; }
+bool Unserialize(const void* src, size_t len)
+{
+    if (!src || len == 0) return false;
+    if (!VMManager::HasValidVM()) return false;
+
+    if (IsStateTraceEnabled())
+        FrontendLog(RETRO_LOG_INFO, "[STATE_TRACE] Unserialize: start len=%zu", len);
+
+    const auto t0 = std::chrono::steady_clock::now();
+    const VMState prev = WaitForVmPaused();
+    if (prev == VMState::Shutdown) return false;
+
+    Error err;
+    const bool ok = SaveState_UnzipFromMemory(src, len, &err);
+    if (!ok)
+    {
+        // SaveState_UnzipFromZip already calls VMManager::Reset() on
+        // mid-load failure. Pre-PreLoadPrep failures (CheckVersion,
+        // missing entries) leave the VM untouched.
+        FrontendLog(RETRO_LOG_WARN, "Unserialize: load failed: %s",
+            err.GetDescription().c_str());
+    }
+
+    ResumeVm(prev);
+
+    if (IsStateTraceEnabled())
+    {
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - t0).count();
+        FrontendLog(RETRO_LOG_INFO, "[STATE_TRACE] Unserialize: done ok=%d in %lldms",
+            ok ? 1 : 0, static_cast<long long>(elapsed));
+    }
+    return ok;
+}
 
 } // namespace Pcsx2Libretro
