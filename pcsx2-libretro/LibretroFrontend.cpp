@@ -12,6 +12,7 @@
 
 #include "EmuThread.h"
 #include "Settings.h"
+#include "LibretroSaveState.h"
 
 #include "pcsx2/VMManager.h"
 #include "MemoryTypes.h"   // eeMem, Ps2MemSize::MainRam
@@ -351,9 +352,9 @@ RETRO_API void retro_run(void)
     }
 }
 
-RETRO_API size_t retro_serialize_size(void) { return 0; }
-RETRO_API bool   retro_serialize(void*, size_t)         { return false; }
-RETRO_API bool   retro_unserialize(const void*, size_t) { return false; }
+RETRO_API size_t retro_serialize_size(void)                  { return Pcsx2Libretro::SerializeSize(); }
+RETRO_API bool   retro_serialize(void* dst, size_t len)      { return Pcsx2Libretro::Serialize(dst, len); }
+RETRO_API bool   retro_unserialize(const void* src, size_t len) { return Pcsx2Libretro::Unserialize(src, len); }
 
 RETRO_API void   retro_cheat_reset(void) {}
 RETRO_API void   retro_cheat_set(unsigned, bool, const char*) {}
@@ -442,6 +443,7 @@ RETRO_API void retro_unload_game(void)
 {
     g_memory_map_issued.store(false);     // re-issue on next game load
     g_logged_running.store(false);        // re-log on next Running
+    Pcsx2Libretro::ResetSerializeSizeCache();  // re-probe on next game load (SP6.5)
     FrontendLog(RETRO_LOG_INFO, "retro_unload_game: requesting VM shutdown");
     Pcsx2Libretro::EmuThread& emu = Pcsx2Libretro::GetEmuThread();
     emu.RequestShutdown();
