@@ -15,6 +15,8 @@
 
 #include "pcsx2/VMManager.h"
 #include "MemoryTypes.h"   // eeMem, Ps2MemSize::MainRam
+#include "SaveState.h"     // memSavingState, memLoadingState
+#include "common/Error.h"  // Error
 
 #include <atomic>
 #include <chrono>
@@ -25,6 +27,7 @@
 #include <filesystem>
 #include <mutex>
 #include <string>
+#include <thread>
 
 using namespace Pcsx2Libretro;
 
@@ -117,6 +120,69 @@ std::atomic<bool> g_logged_running{false};
 // game re-issues with fresh pointers (eeMem may be reallocated across
 // VM init/shutdown cycles).
 std::atomic<bool> g_memory_map_issued{false};
+
+// Atomic, used by retro_serialize_size to return a constant after
+// the first successful probe. 0 means "VM not yet ready, try again".
+// Reset to 0 in retro_unload_game (different games = different sizes).
+std::atomic<size_t> g_serialize_size{0};
+
+// Pauses the VM and waits for it to reach VMState::Paused. Returns
+// the state observed BEFORE the pause was requested, so the caller
+// can restore it (we don't want to leave a Paused VM Running, or
+// vice-versa).
+//
+// Polls in 1 ms increments up to a 200 ms ceiling. PCSX2-Qt uses the
+// same handshake for its "save state while running" UI; the EE
+// thread reaches the next event-test typically within a single
+// frame (~16 ms). 200 ms is generous — if we hit the ceiling
+// something is wrong (deep MTGS stall, infinite loop in interpreter)
+// and we abort the save rather than block the host indefinitely.
+//
+// Caller must call ResumeVm(prev_state) regardless of whether the
+// serialize succeeded.
+//
+// Returns VMState::Shutdown sentinel if pause failed (VM exited
+// during the wait, etc.); caller should bail.
+VMState WaitForVmPaused()
+{
+    using namespace std::chrono_literals;
+    const VMState prev = VMManager::GetState();
+    if (prev != VMState::Running)
+    {
+        // Already paused / not running. No handshake needed.
+        return prev;
+    }
+    VMManager::SetPaused(true);
+    const auto start = std::chrono::steady_clock::now();
+    const auto deadline = start + 200ms;
+    while (std::chrono::steady_clock::now() < deadline)
+    {
+        const VMState s = VMManager::GetState();
+        if (s == VMState::Paused)
+        {
+            // (Task 5 adds a trace line here.)
+            return prev;
+        }
+        if (s == VMState::Shutdown) return VMState::Shutdown;
+        std::this_thread::sleep_for(1ms);
+    }
+    FrontendLog(RETRO_LOG_WARN,
+        "WaitForVmPaused: 200 ms deadline exceeded — VMState=%d",
+        static_cast<int>(VMManager::GetState()));
+    return VMState::Shutdown;  // bail
+}
+
+// Restores the VM to prev_state (the value returned by
+// WaitForVmPaused). If prev was Running, un-pause. Otherwise leave
+// as-is.
+void ResumeVm(VMState prev_state)
+{
+    if (prev_state == VMState::Running &&
+        VMManager::GetState() == VMState::Paused)
+    {
+        VMManager::SetPaused(false);
+    }
+}
 
 } // namespace
 
@@ -323,9 +389,131 @@ RETRO_API void retro_run(void)
     }
 }
 
-RETRO_API size_t retro_serialize_size(void) { return 0; }
-RETRO_API bool   retro_serialize(void*, size_t)         { return false; }
-RETRO_API bool   retro_unserialize(const void*, size_t) { return false; }
+RETRO_API size_t retro_serialize_size(void)
+{
+    // Probe-once: serialize state into a scratch buffer, cache its
+    // size, return that constant forever. Returns 0 pre-Running so
+    // the frontend retries later (spec-legal).
+    //
+    // PCSX2 raw save-state size is deterministic per (build, ELF).
+    // Variable-size sources (compression, screenshots, zip headers)
+    // aren't in memSavingState's output — it's pure raw bytes.
+    const size_t cached = g_serialize_size.load();
+    if (cached != 0) return cached;
+    if (!VMManager::HasValidVM()) return 0;
+    if (VMManager::GetState() != VMState::Running) return 0;
+
+    const VMState prev = WaitForVmPaused();
+    if (prev == VMState::Shutdown)
+    {
+        FrontendLog(RETRO_LOG_WARN, "retro_serialize_size: pause handshake failed");
+        return 0;
+    }
+
+    size_t probed = 0;
+    {
+        SaveStateBase::VmStateBuffer probe;
+        memSavingState s(probe);
+        Error err;
+        if (s.FreezeBios() && s.FreezeInternals(&err) && !s.HasError())
+        {
+            probed = probe.size();
+        }
+        else
+        {
+            FrontendLog(RETRO_LOG_WARN,
+                "retro_serialize_size: probe FreezeInternals failed (%s)",
+                err.GetDescription().c_str());
+        }
+    }
+
+    ResumeVm(prev);
+
+    if (probed == 0) return 0;
+    g_serialize_size.store(probed);
+    FrontendLog(RETRO_LOG_INFO,
+        "retro_serialize_size: probed=%zu bytes (cached)", probed);
+    return probed;
+}
+
+RETRO_API bool retro_serialize(void* dst, size_t len)
+{
+    if (!dst) return false;
+    const size_t expected = g_serialize_size.load();
+    if (expected == 0) return false;       // probe hasn't run yet
+    if (len < expected) return false;      // frontend allocation bug
+    if (!VMManager::HasValidVM()) return false;
+
+    const VMState prev = WaitForVmPaused();
+    if (prev == VMState::Shutdown) return false;
+
+    bool ok = false;
+    {
+        SaveStateBase::VmStateBuffer buf;
+        memSavingState s(buf);
+        Error err;
+        if (s.FreezeBios() && s.FreezeInternals(&err) && !s.HasError())
+        {
+            if (buf.size() > len)
+            {
+                FrontendLog(RETRO_LOG_ERROR,
+                    "retro_serialize: produced %zu bytes but caller buffer is %zu — "
+                    "probe-once assumption violated; not writing", buf.size(), len);
+            }
+            else
+            {
+                std::memcpy(dst, buf.data(), buf.size());
+                if (buf.size() < len)
+                {
+                    std::memset(static_cast<u8*>(dst) + buf.size(), 0,
+                                len - buf.size());
+                }
+                ok = true;
+            }
+        }
+        else
+        {
+            FrontendLog(RETRO_LOG_WARN,
+                "retro_serialize: FreezeInternals failed (%s)",
+                err.GetDescription().c_str());
+        }
+    }
+
+    ResumeVm(prev);
+    return ok;
+}
+
+RETRO_API bool retro_unserialize(const void* src, size_t len)
+{
+    if (!src || len == 0) return false;
+    if (!VMManager::HasValidVM()) return false;
+
+    const VMState prev = WaitForVmPaused();
+    if (prev == VMState::Shutdown) return false;
+
+    bool ok = false;
+    {
+        // Copy src bytes into a VmStateBuffer (memLoadingState reads
+        // from the vector). The trailing zero-padding from
+        // retro_serialize is harmless — memLoadingState reads only
+        // what FreezeInternals asks for, ignoring the tail.
+        SaveStateBase::VmStateBuffer buf(
+            static_cast<const u8*>(src),
+            static_cast<const u8*>(src) + len);
+        memLoadingState s(buf);
+        Error err;
+        ok = s.FreezeBios() && s.FreezeInternals(&err) && !s.HasError();
+        if (!ok)
+        {
+            FrontendLog(RETRO_LOG_WARN,
+                "retro_unserialize: FreezeInternals failed (%s) — VM state may be corrupt",
+                err.GetDescription().c_str());
+        }
+    }
+
+    ResumeVm(prev);
+    return ok;
+}
 
 RETRO_API void   retro_cheat_reset(void) {}
 RETRO_API void   retro_cheat_set(unsigned, bool, const char*) {}
@@ -402,6 +590,7 @@ RETRO_API bool retro_load_game_special(unsigned, const struct retro_game_info*, 
 RETRO_API void retro_unload_game(void)
 {
     g_memory_map_issued.store(false);     // re-issue on next game load
+    g_serialize_size.store(0);            // re-probe on next game load
     g_logged_running.store(false);        // re-log on next Running
     FrontendLog(RETRO_LOG_INFO, "retro_unload_game: requesting VM shutdown");
     Pcsx2Libretro::EmuThread& emu = Pcsx2Libretro::GetEmuThread();
