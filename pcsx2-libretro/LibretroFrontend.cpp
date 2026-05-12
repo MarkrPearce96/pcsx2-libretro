@@ -187,7 +187,13 @@ RETRO_API void retro_set_controller_port_device(unsigned port, unsigned device)
 
 RETRO_API void retro_reset(void)
 {
-    FrontendLog(RETRO_LOG_INFO, "retro_reset — no-op in skeleton");
+    if (!VMManager::HasValidVM())
+    {
+        FrontendLog(RETRO_LOG_INFO, "retro_reset called with no valid VM — ignoring");
+        return;
+    }
+    FrontendLog(RETRO_LOG_INFO, "retro_reset → VMManager::Reset()");
+    VMManager::Reset();
 }
 
 RETRO_API void retro_run(void)
