@@ -59,6 +59,9 @@ extern bool SaveState_ZipToDisk(
 	const char* filename, Error* error);
 extern bool SaveState_ReadScreenshot(const std::string& filename, u32* out_width, u32* out_height, std::vector<u32>* out_pixels);
 extern bool SaveState_UnzipFromDisk(const std::string& filename, Error* error);
+// pcsx2-libretro: SP6.5 — in-memory unzip for the libretro core's retro_unserialize.
+// Shares the same body as SaveState_UnzipFromDisk via a private SaveState_UnzipFromZip helper.
+extern bool SaveState_UnzipFromMemory(const void* buf, size_t size, Error* error);
 
 // --------------------------------------------------------------------------------------
 //  SaveStateBase class
