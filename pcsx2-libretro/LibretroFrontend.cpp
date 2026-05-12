@@ -118,6 +118,19 @@ std::atomic<bool> g_logged_running{false};
 // VM init/shutdown cycles).
 std::atomic<bool> g_memory_map_issued{false};
 
+// RETRONEST_STATE_TRACE: env-gated trace at retro_reset boundary.
+// Zero overhead when unset (single getenv at first call, cached bool
+// thereafter). Mirrors RETRONEST_AUDIO_TRACE (SP4) and
+// RETRONEST_INPUT_TRACE (SP5).
+//
+// SP6 only adds the retro_reset boundary; save-state / pause-handshake
+// trace boundaries are deferred to SP6.5 along with save-state.
+bool IsStateTraceEnabled()
+{
+    static const bool s_enabled = (std::getenv("RETRONEST_STATE_TRACE") != nullptr);
+    return s_enabled;
+}
+
 } // namespace
 
 RETRO_API void retro_set_environment(retro_environment_t cb)        { g_frontend.environ_cb     = cb; }
@@ -218,6 +231,10 @@ RETRO_API void retro_reset(void)
         FrontendLog(RETRO_LOG_INFO, "retro_reset called with no valid VM — ignoring");
         return;
     }
+    if (IsStateTraceEnabled())
+        FrontendLog(RETRO_LOG_INFO,
+            "[STATE_TRACE] retro_reset state=%d",
+            static_cast<int>(VMManager::GetState()));
     FrontendLog(RETRO_LOG_INFO, "retro_reset → VMManager::Reset()");
     VMManager::Reset();
 }
