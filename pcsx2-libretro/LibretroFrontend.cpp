@@ -131,6 +131,47 @@ bool IsStateTraceEnabled()
     return s_enabled;
 }
 
+// Issue SET_MEMORY_MAPS once per loaded game. Idempotent — guarded by
+// g_memory_map_issued atomic so concurrent calls from retro_load_game
+// (primary path, lands before RetroNest's RcheevosRuntime memory_init)
+// and retro_run first-Running frame (safety belt) cooperate cleanly.
+//
+// EE main RAM is the 32 MB region at PS2-physical 0x00000000.
+// RetroAchievements needs this descriptor to read PS2 cheevo memory
+// addresses; if rcheevos initializes BEFORE this fires, the cheevo
+// session loads with regions=0 and achievements never trigger even
+// though the set is logged-in.
+//
+// RetroNest's env handler at environment_callbacks.cpp:133-163 copies
+// the descriptor array + addrspace strings before this call returns,
+// so stack-allocated structs are safe.
+void TryIssueMemoryMaps()
+{
+    if (g_memory_map_issued.load()) return;
+    if (eeMem == nullptr) return;             // VM init may not yet have allocated EE RAM
+    if (!g_frontend.environ_cb) return;       // frontend not yet wired
+
+    retro_memory_descriptor desc{};
+    desc.ptr       = eeMem->Main;
+    desc.start     = 0x00000000;          // PS2-physical
+    desc.len       = Ps2MemSize::MainRam; // 32 MB
+    desc.select    = 0;                   // RA infers from start+len
+    desc.flags     = RETRO_MEMDESC_SYSTEM_RAM;
+    desc.addrspace = "";                  // unnamed default
+
+    retro_memory_map mm{};
+    mm.descriptors     = &desc;
+    mm.num_descriptors = 1;
+
+    const bool ok = g_frontend.environ_cb(
+        RETRO_ENVIRONMENT_SET_MEMORY_MAPS, &mm);
+    FrontendLog(ok ? RETRO_LOG_INFO : RETRO_LOG_WARN,
+        "SET_MEMORY_MAPS issued: ee_ram_ptr=%p len=%u %s",
+        desc.ptr, static_cast<unsigned>(desc.len),
+        ok ? "(accepted)" : "(frontend returned false)");
+    g_memory_map_issued.store(true);
+}
+
 } // namespace
 
 RETRO_API void retro_set_environment(retro_environment_t cb)        { g_frontend.environ_cb     = cb; }
@@ -258,39 +299,9 @@ RETRO_API void retro_run(void)
         }
     }
 
-    // One-shot SET_MEMORY_MAPS issue when VM first reports Running.
-    // EE main RAM is the 32 MB region at PS2-physical 0x00000000.
-    // RetroAchievements needs this descriptor to read PS2 cheevo
-    // memory addresses (without it, every PS2 cheevo silently fails
-    // to trigger). RetroNest's env handler at
-    // environment_callbacks.cpp:133-163 captures + copies the
-    // descriptors and addrspace strings before this call returns, so
-    // stack-allocated structs are safe.
-    if (!g_memory_map_issued.load() &&
-        VMManager::GetState() == VMState::Running &&
-        eeMem != nullptr &&
-        g_frontend.environ_cb)
-    {
-        retro_memory_descriptor desc{};
-        desc.ptr       = eeMem->Main;
-        desc.start     = 0x00000000;          // PS2-physical
-        desc.len       = Ps2MemSize::MainRam; // 32 MB
-        desc.select    = 0;                   // RA infers from start+len
-        desc.flags     = RETRO_MEMDESC_SYSTEM_RAM;
-        desc.addrspace = "";                  // unnamed default
-
-        retro_memory_map mm{};
-        mm.descriptors     = &desc;
-        mm.num_descriptors = 1;
-
-        const bool ok = g_frontend.environ_cb(
-            RETRO_ENVIRONMENT_SET_MEMORY_MAPS, &mm);
-        FrontendLog(ok ? RETRO_LOG_INFO : RETRO_LOG_WARN,
-            "SET_MEMORY_MAPS issued: ee_ram_ptr=%p len=%u %s",
-            desc.ptr, static_cast<unsigned>(desc.len),
-            ok ? "(accepted)" : "(frontend returned false)");
-        g_memory_map_issued.store(true);
-    }
+    // Safety-belt SET_MEMORY_MAPS issue, in case retro_load_game's
+    // primary call fired before eeMem was allocated. Idempotent.
+    TryIssueMemoryMaps();
 
     // Frame-paced wait. PCSX2's MTGS thread signals g_present_cv from
     // Host::BeginPresentFrame after each rendered frame. retro_run returns
@@ -408,6 +419,17 @@ RETRO_API bool retro_load_game(const struct retro_game_info* game)
 
     FrontendLog(RETRO_LOG_INFO, "retro_load_game: VM started successfully");
     g_logged_running.store(false);
+
+    // Primary SET_MEMORY_MAPS issue site. VMManager::Initialize completed
+    // successfully → eeMem is allocated → safe to descriptor-up the EE
+    // main RAM region. Issuing here (rather than from retro_run's first
+    // Running frame) lands BEFORE RetroNest's RcheevosRuntime calls
+    // rc_libretro_memory_init — without this ordering, the cheevo set
+    // loads with regions=0 and achievements never trigger even when
+    // logged-in. The retro_run call site below is now a safety-belt no-op
+    // in the normal case (eeMem was already valid at this point).
+    TryIssueMemoryMaps();
+
     return true;
 }
 
