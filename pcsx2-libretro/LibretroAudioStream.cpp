@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstdlib>
 #include <cstring>
 
 namespace Pcsx2Libretro
@@ -26,6 +27,11 @@ namespace
     // own s_output_stream pointer), but retro_run on the main thread must
     // see a coherent value relative to ctor/dtor on the CPU thread.
     std::atomic<LibretroAudioStream*> s_active_stream{nullptr};
+
+    // Env-gated audio path diagnostic (RETRONEST_AUDIO_TRACE=1). Read once
+    // at first dlopen; zero overhead when unset.
+    const bool g_trace_enabled = (std::getenv("RETRONEST_AUDIO_TRACE") != nullptr);
+    std::atomic<u64> g_drain_count{0};
 } // namespace
 
 LibretroAudioStream::LibretroAudioStream(u32 sample_rate, const AudioStreamParameters& parameters)
@@ -76,6 +82,11 @@ u32 LibretroAudioStream::DrainToLibretroCallback(retro_audio_sample_batch_t cb, 
         return 0;
 
     max_frames = std::min(max_frames, MAX_FRAMES_PER_DRAIN);
+
+    // Trace snapshot at entry (used by the optional log at function exit).
+    // Cheap unconditional read; the gated log itself is once per ~60 calls.
+    const u32 pending_at_entry = m_pending_frames;
+    const u32 ring_at_entry = GetBufferedFramesRelaxed();
 
     // Step 1: flush any frames the frontend rejected on the previous call.
     // m_pending_frames is non-zero only if the previous cb() returned less
@@ -134,6 +145,19 @@ u32 LibretroAudioStream::DrainToLibretroCallback(retro_audio_sample_batch_t cb, 
         m_first_drain_logged = true;
     }
 
+    if (g_trace_enabled)
+    {
+        const u64 idx = g_drain_count.fetch_add(1, std::memory_order_relaxed);
+        if ((idx % 60) == 0)
+        {
+            FrontendLog(RETRO_LOG_INFO,
+                "[AUDIO_TRACE] drain idx=%llu ring_at_entry=%u pending_at_entry=%u "
+                "max_frames=%u available=%u accepted=%zu",
+                static_cast<unsigned long long>(idx),
+                ring_at_entry, pending_at_entry, max_frames, available, accepted);
+        }
+    }
+
     return static_cast<u32>(accepted);
 }
 
@@ -149,6 +173,14 @@ std::unique_ptr<AudioStream> CreateLibretroAudioStream(u32 sample_rate,
     // If SPU2 wants stretch, re-init now via the public SetStretchEnabled.
     if (stretch_enabled)
         stream->SetStretchEnabled(true);
+
+    if (std::getenv("RETRONEST_AUDIO_TRACE"))
+    {
+        Pcsx2Libretro::FrontendLog(RETRO_LOG_INFO,
+            "[AUDIO_TRACE] factory sample_rate=%u stretch_enabled=%d expansion=%d",
+            sample_rate, static_cast<int>(stretch_enabled),
+            static_cast<int>(parameters.expansion_mode));
+    }
 
     return stream;
 }
