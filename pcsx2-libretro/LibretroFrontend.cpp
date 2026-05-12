@@ -14,6 +14,7 @@
 #include "Settings.h"
 
 #include "pcsx2/VMManager.h"
+#include "MemoryTypes.h"   // eeMem, Ps2MemSize::MainRam
 
 #include <atomic>
 #include <chrono>
@@ -91,6 +92,12 @@ std::string GetSystemDirectory()
 
 // Atomic, used by retro_run to log VM state transitions only once.
 std::atomic<bool> g_logged_running{false};
+
+// Atomic, used by retro_run to issue SET_MEMORY_MAPS exactly once per
+// loaded game. Reset to false in retro_unload_game so the next loaded
+// game re-issues with fresh pointers (eeMem may be reallocated across
+// VM init/shutdown cycles).
+std::atomic<bool> g_memory_map_issued{false};
 
 } // namespace
 
@@ -213,6 +220,40 @@ RETRO_API void retro_run(void)
                         crc);
             g_logged_running.store(true);
         }
+    }
+
+    // One-shot SET_MEMORY_MAPS issue when VM first reports Running.
+    // EE main RAM is the 32 MB region at PS2-physical 0x00000000.
+    // RetroAchievements needs this descriptor to read PS2 cheevo
+    // memory addresses (without it, every PS2 cheevo silently fails
+    // to trigger). RetroNest's env handler at
+    // environment_callbacks.cpp:133-163 captures + copies the
+    // descriptors and addrspace strings before this call returns, so
+    // stack-allocated structs are safe.
+    if (!g_memory_map_issued.load() &&
+        VMManager::GetState() == VMState::Running &&
+        eeMem != nullptr &&
+        g_frontend.environ_cb)
+    {
+        retro_memory_descriptor desc{};
+        desc.ptr       = eeMem->Main;
+        desc.start     = 0x00000000;          // PS2-physical
+        desc.len       = Ps2MemSize::MainRam; // 32 MB
+        desc.select    = 0;                   // RA infers from start+len
+        desc.flags     = RETRO_MEMDESC_SYSTEM_RAM;
+        desc.addrspace = "";                  // unnamed default
+
+        retro_memory_map mm{};
+        mm.descriptors     = &desc;
+        mm.num_descriptors = 1;
+
+        const bool ok = g_frontend.environ_cb(
+            RETRO_ENVIRONMENT_SET_MEMORY_MAPS, &mm);
+        FrontendLog(ok ? RETRO_LOG_INFO : RETRO_LOG_WARN,
+            "SET_MEMORY_MAPS issued: ee_ram_ptr=%p len=%u %s",
+            desc.ptr, static_cast<unsigned>(desc.len),
+            ok ? "(accepted)" : "(frontend returned false)");
+        g_memory_map_issued.store(true);
     }
 
     // Frame-paced wait. PCSX2's MTGS thread signals g_present_cv from
@@ -340,6 +381,8 @@ RETRO_API bool retro_load_game_special(unsigned, const struct retro_game_info*, 
 
 RETRO_API void retro_unload_game(void)
 {
+    g_memory_map_issued.store(false);     // re-issue on next game load
+    g_logged_running.store(false);        // re-log on next Running
     FrontendLog(RETRO_LOG_INFO, "retro_unload_game: requesting VM shutdown");
     Pcsx2Libretro::EmuThread& emu = Pcsx2Libretro::GetEmuThread();
     emu.RequestShutdown();
