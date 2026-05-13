@@ -16,6 +16,7 @@ target_sources(pcsx2_libretro PRIVATE
     LibretroAudioStream.cpp
     LibretroInputSource.cpp
     LibretroSaveState.cpp
+    CoreOptions.cpp
     CoreResources.cpp
 )
 
