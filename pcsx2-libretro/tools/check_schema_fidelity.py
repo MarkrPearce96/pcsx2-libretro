@@ -47,21 +47,26 @@ CORE_BLOCK_RE = re.compile(
 # The terminator pair is {nullptr, nullptr} — we skip those.
 VALUE_PAIR_RE = re.compile(r'\{\s*"([^"]+)"\s*,\s*"[^"]*"\s*\}')
 
-# Host-side: s.append(opt(...)) with positional args. As of SP7c Phase 1
-# Task 2, opt() takes (category, group, key, label, default, values,
-# tooltip[, dependsOn]).
+# Host-side: s.append(opt(...)) or s.append(gopt(...)) with positional
+# args. As of SP7c Phase 1 Task 2, opt() takes (category, group, key,
+# label, default, values, tooltip[, dependsOn]). Phase 4 Task 2 adds
+# gopt() — same positional layout but the first string is `subcategory`
+# (category is hardcoded to "Graphics" inside the helper). Because both
+# helpers' first argument is just a quoted string, the regex doesn't
+# need to distinguish them — alternation on the helper name + treating
+# arg-1 as an opaque string suffices.
 #   s.append(opt("Emulation", "Speed Control",
-#                "pcsx2_normal_speed", "Normal Speed", "1",
-#                {{"100% ...", "1"}, ...},
+#                "pcsx2_normal_speed", "Normal Speed", "1", {...},
 #                "tooltip..."));
-# Older two-argument-prefix variants (without the leading category/group
-# pair) are no longer supported — every call site was migrated at the
-# same commit. We pull the key, the default, and the {label,
-# stored_value} pairs from the initializer list (pairs in host are
-# (label, value) — opposite order from core's (value, label)).
+#   s.append(gopt("Display", "Display",
+#                 "pcsx2_aspect_ratio", "Aspect Ratio", "4:3", {...},
+#                 "tooltip..."));
+# We pull the key, the default, and the {label, stored_value} pairs
+# from the initializer list (pairs in host are (label, value) — opposite
+# order from core's (value, label)).
 HOST_BLOCK_RE = re.compile(
-    r's\.append\(\s*opt\(\s*'
-    r'"[^"]+"\s*,\s*'                  # category
+    r's\.append\(\s*(?:opt|gopt)\(\s*'
+    r'"[^"]+"\s*,\s*'                  # category (or subcategory in gopt)
     r'"[^"]+"\s*,\s*'                  # group
     r'"(?P<key>[^"]+)"\s*,\s*'         # key
     r'"[^"]*"\s*,\s*'                  # label
