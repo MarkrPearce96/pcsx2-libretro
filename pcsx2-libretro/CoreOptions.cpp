@@ -51,6 +51,11 @@ Resolved ReadResolved(retro_environment_t cb)
         else if (std::strcmp(v, "metal")    == 0) r.renderer = 17;
         else if (std::strcmp(v, "software") == 0) r.renderer = 13;
         else if (std::strcmp(v, "null")     == 0) r.renderer = 11;
+        else {
+            FrontendLog(RETRO_LOG_WARN,
+                "[CoreOptions] Unknown renderer '%s'; defaulting to auto", v);
+            r.renderer = -1;
+        }
     }
 
     if (const char* v = query("pcsx2_mtvu"))

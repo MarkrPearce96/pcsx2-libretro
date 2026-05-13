@@ -104,6 +104,40 @@ int main()
     check_bool("Case 1 mtvu",      r.mtvu,      false);
     check_bool("Case 1 fast_boot", r.fast_boot, false);
 
+    // -------- Case 2: NULL value for one key — that field stays at default --------
+    fake::reset();
+    fake::variables["pcsx2_renderer"]  = "software";  // 13
+    fake::null_for_key = true;
+    fake::null_key = "pcsx2_mtvu";                    // → default true
+    fake::variables["pcsx2_fast_boot"] = "disabled";  // → false
+
+    r = ReadResolved(&fake_env_cb);
+    check_int ("Case 2 renderer",  r.renderer,  13);
+    check_bool("Case 2 mtvu",      r.mtvu,      true);   // default
+    check_bool("Case 2 fast_boot", r.fast_boot, false);
+
+    // -------- Case 3: unknown renderer enum → default -1 (Auto) --------
+    fake::reset();
+    fake::variables["pcsx2_renderer"]  = "vulkan";        // not in our schema
+    fake::variables["pcsx2_mtvu"]      = "enabled";
+    fake::variables["pcsx2_fast_boot"] = "enabled";
+
+    r = ReadResolved(&fake_env_cb);
+    check_int ("Case 3 renderer (unknown)", r.renderer, -1);
+    check_bool("Case 3 mtvu",               r.mtvu,      true);
+    check_bool("Case 3 fast_boot",          r.fast_boot, true);
+
+    // -------- Case 4: all defaults — every key returns its declared default string --------
+    fake::reset();
+    fake::variables["pcsx2_renderer"]  = "auto";
+    fake::variables["pcsx2_mtvu"]      = "enabled";
+    fake::variables["pcsx2_fast_boot"] = "enabled";
+
+    r = ReadResolved(&fake_env_cb);
+    check_int ("Case 4 renderer",  r.renderer,  -1);
+    check_bool("Case 4 mtvu",      r.mtvu,      true);
+    check_bool("Case 4 fast_boot", r.fast_boot, true);
+
     std::printf("\n%d failure(s)\n", failures);
     return failures == 0 ? 0 : 1;
 }
