@@ -119,6 +119,21 @@ std::atomic<bool> g_logged_running{false};
 // VM init/shutdown cycles).
 std::atomic<bool> g_memory_map_issued{false};
 
+// SP6.5 Task 4.5: private env call agreed with RetroNest. RetroNest
+// stores the resume-state path in EnvironmentContext::bootStatePath
+// before retro_load_game; we query during retro_load_game and, if a
+// path comes back, set params.save_state so VMManager::Initialize
+// loads the state via DoLoadState after full BIOS init / ELF discovery
+// (pcsx2/VMManager.cpp:1636-1643) — the only ordering that produces a
+// runnable VM for cold-resume on launch.
+//
+// Number must match RetroNest's environment_callbacks.h define exactly.
+// RETRO_ENVIRONMENT_PRIVATE = 0x20000 per libretro.h; 0x20001 is
+// already used by RETRONEST_ENVIRONMENT_GET_MACOS_NSVIEW; 0x20002 is
+// the next free RetroNest-private slot.
+constexpr unsigned RETRONEST_ENVIRONMENT_GET_BOOT_STATE_PATH =
+    (2u | RETRO_ENVIRONMENT_PRIVATE);
+
 // RETRONEST_STATE_TRACE: env-gated trace at retro_reset boundary.
 // Zero overhead when unset (single getenv at first call, cached bool
 // thereafter). Mirrors RETRONEST_AUDIO_TRACE (SP4) and
@@ -404,6 +419,42 @@ RETRO_API bool retro_load_game(const struct retro_game_info* game)
     VMBootParameters params{};
     params.filename = game->path;
     params.fast_boot = true;
+
+    // SP6.5 Task 4.5: cold-resume on launch.
+    //
+    // RetroNest stashes a resume-state path in its EnvironmentContext
+    // BEFORE calling retro_load_game (CoreRuntime::runLoop). We query
+    // it here; if a non-empty path comes back, we set params.save_state
+    // so VMManager::Initialize runs DoLoadState at the end of full VM
+    // init (after BIOS init / ELF discovery / s_fast_boot_requested) —
+    // exactly the ordering PCSX2-Qt uses when launching with a state.
+    //
+    // The env handler marks the path consumed so RetroNest's post-
+    // retro_load_game legacy retro_unserialize block skips itself; the
+    // load happened inside VMManager::Initialize and re-loading would
+    // race the freshly-loaded VM state.
+    //
+    // mGBA and other cores that don't define this env call get
+    // false from the env_cb, take the empty-path fast path here, and
+    // RetroNest's legacy retro_unserialize block handles their cold-
+    // resume as before. Backward-compatible by construction.
+    if (g_frontend.environ_cb)
+    {
+        const char* boot_state = nullptr;
+        if (g_frontend.environ_cb(RETRONEST_ENVIRONMENT_GET_BOOT_STATE_PATH,
+                                  &boot_state) &&
+            boot_state && boot_state[0] != '\0')
+        {
+            // Copy into params.save_state immediately — the env handler's
+            // returned pointer is only stable for the duration of this
+            // env_cb call (RetroNest sets bootStatePathConsumed=true on
+            // read and may later destroy the backing QByteArray).
+            params.save_state = boot_state;
+            FrontendLog(RETRO_LOG_INFO,
+                "retro_load_game: cold-boot via save state %s",
+                params.save_state.c_str());
+        }
+    }
 
     Pcsx2Libretro::EmuThread& emu = Pcsx2Libretro::GetEmuThread();
     const bool ok = emu.Start(params);
