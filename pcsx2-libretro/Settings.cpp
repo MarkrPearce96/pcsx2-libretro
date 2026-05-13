@@ -7,6 +7,7 @@
 #include "CoreResources.h"
 #include "CoreOptions.h"
 #include "CoreOptionsEmulation.h"
+#include "CoreOptionsAudio.h"
 #include "LibretroFrontend.h"
 
 #include "common/Error.h"
@@ -303,9 +304,13 @@ void InitializeDefaults(const std::string& system_dir,
     // When options is null, default Values{} writes the SP7a-era hardcoded
     // defaults — preserves pre-SP7b behavior for any caller that omits options.
     {
-        const CoreOptions::Emulation::Values defaults{};
+        const CoreOptions::Emulation::Values em_defaults{};
         CoreOptions::Emulation::ApplyDefaults(
-            g_si, options ? options->emulation : defaults);
+            g_si, options ? options->emulation : em_defaults);
+
+        const CoreOptions::Audio::Values audio_defaults{};
+        CoreOptions::Audio::ApplyDefaults(
+            g_si, options ? options->audio : audio_defaults);
     }
 
     // Push the layered settings to the live Pcsx2Config so PCSX2's
