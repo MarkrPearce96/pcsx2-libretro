@@ -101,6 +101,27 @@ void EmuThread::RequestShutdown()
     // attempt 1 (calling Cpu->ExitExecution unconditionally) was
     // verified to crash via this exact path.
     m_stop_requested.store(true, std::memory_order_release);
+
+    // SP6.5 Task 4.6: nudge Cpu->Execute to return via the SP6.5-proven
+    // pause path so emu.Join() doesn't block indefinitely on a busy EE
+    // (which was the SP3.6 "Quit hangs UI worst-case" symptom — user
+    // had to Cmd+Q RetroNest from the dock to recover; UX-visibly,
+    // Save & Exit wrote the .resume file but never transitioned UI
+    // to home because GameSession::finished was blocked on this Join).
+    //
+    // VMManager::SetPaused(true) routes through VMManager::SetState
+    // which is thread-safe from any thread — SP6.5 task 3 verified
+    // this live, calling SetPaused from the libretro worker thread
+    // 5+ times mid-session for save state with no crash. The pause
+    // request flows through PCSX2's CPU dispatch in a way that
+    // properly exits Execute on the CPU thread itself, instead of
+    // longjmping from the caller's stack like Cpu->ExitExecution does.
+    //
+    // The EmuThread loop sees state=Paused, sleeps 1 ms, wakes, sees
+    // m_stop_requested true at the top of the loop, sets Stopping,
+    // breaks. emu.Join() unblocks within ~1 frame.
+    if (VMManager::HasValidVM())
+        VMManager::SetPaused(true);
 }
 
 void EmuThread::Join()
