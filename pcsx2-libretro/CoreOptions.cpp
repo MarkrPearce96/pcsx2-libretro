@@ -108,9 +108,13 @@ bool EmitCoreOptionsV2(retro_environment_t cb)
     const bool ok = cb(RETRO_ENVIRONMENT_SET_CORE_OPTIONS_V2,
                        const_cast<retro_core_options_v2*>(&kCoreOptionsV2));
     if (!ok) {
+        // Per libretro.h:2340, a false return signals that the host doesn't
+        // support option categories — the options themselves are still
+        // registered and GET_VARIABLE still works. We pass categories=nullptr
+        // anyway, so this is purely informational; user values still flow.
         FrontendLog(RETRO_LOG_WARN,
-            "[CoreOptions] SET_CORE_OPTIONS_V2 not supported by host; "
-            "core will use built-in defaults");
+            "[CoreOptions] Host does not support core-option categories "
+            "(options are still registered and GET_VARIABLE will work)");
     }
     return ok;
 }
