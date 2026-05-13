@@ -17,6 +17,7 @@ target_sources(pcsx2_libretro PRIVATE
     LibretroInputSource.cpp
     LibretroSaveState.cpp
     CoreOptions.cpp
+    CoreOptionsEmulation.cpp
     CoreResources.cpp
 )
 
