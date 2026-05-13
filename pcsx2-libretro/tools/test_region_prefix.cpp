@@ -16,7 +16,6 @@
 
 #include "../CoreResources.h"
 
-#include <cassert>
 #include <cstdio>
 #include <string>
 
