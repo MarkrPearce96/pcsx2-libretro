@@ -138,6 +138,27 @@ int main()
     check_bool("Case 4 mtvu",      r.mtvu,      true);
     check_bool("Case 4 fast_boot", r.fast_boot, true);
 
+    // -------- Case 5: EmitCoreOptionsV2 dispatches all three keys --------
+    fake::reset();
+    fake::emit_returns = true;
+    const bool emit_ok = EmitCoreOptionsV2(&fake_env_cb);
+    check_bool("Case 5 emit returned true", emit_ok, true);
+    check_int ("Case 5 emit was seen",
+               static_cast<int>(fake::emit_seen ? 1 : 0), 1);
+    check_int ("Case 5 emitted 3 keys",
+               static_cast<int>(fake::emitted_keys.size()), 3);
+    // Order matches the kDefinitions[] table order in CoreOptions.cpp.
+    auto str_eq = [](const std::string& a, const char* b) { return a == b; };
+    check_bool("Case 5 key 0 = pcsx2_renderer",
+               !fake::emitted_keys.empty()
+               && str_eq(fake::emitted_keys[0], "pcsx2_renderer"), true);
+    check_bool("Case 5 key 1 = pcsx2_mtvu",
+               fake::emitted_keys.size() > 1
+               && str_eq(fake::emitted_keys[1], "pcsx2_mtvu"), true);
+    check_bool("Case 5 key 2 = pcsx2_fast_boot",
+               fake::emitted_keys.size() > 2
+               && str_eq(fake::emitted_keys[2], "pcsx2_fast_boot"), true);
+
     std::printf("\n%d failure(s)\n", failures);
     return failures == 0 ? 0 : 1;
 }
