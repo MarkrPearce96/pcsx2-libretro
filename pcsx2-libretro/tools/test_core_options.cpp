@@ -7,6 +7,7 @@
 //   cd pcsx2-libretro/tools
 //   clang++ -std=c++20 -I.. test_core_options.cpp \
 //       ../CoreOptions.cpp ../CoreOptionsEmulation.cpp ../CoreOptionsAudio.cpp \
+//       ../CoreOptionsMemoryCards.cpp \
 //       -DCORE_OPTIONS_TEST_ONLY -o test_core_options
 //   ./test_core_options
 //
@@ -362,6 +363,46 @@ int main()
         const bool sm_default = r.audio.sync_mode == "TimeStretch";
         check_bool("Case 11 unknown sync_mode → TimeStretch", sm_default, true);
     }
+
+    // -------- Case 12: Memory Cards round-trip --------
+    //
+    // SP7c Phase 3 representative test for the Memory Cards card. Sets
+    // all 5 MemoryCards knobs to NON-default values (slot1=off,
+    // slot2=off, all 3 multitap=on), parses, asserts each field reflects
+    // the env-var value. The non-default choice for each knob means a
+    // broken Parse branch (e.g. struct-init bleed-through) would be
+    // caught — testing slot1=on against the default true would be a
+    // tautology.
+    fake::reset();
+    fake::variables["pcsx2_mc_slot1_enable"]    = "disabled";
+    fake::variables["pcsx2_mc_slot2_enable"]    = "disabled";
+    fake::variables["pcsx2_mc_multitap1_slot2"] = "enabled";
+    fake::variables["pcsx2_mc_multitap1_slot3"] = "enabled";
+    fake::variables["pcsx2_mc_multitap1_slot4"] = "enabled";
+
+    r = ReadResolved(&fake_env_cb);
+    check_bool("Case 12 slot1=disabled",    r.memory_cards.slot1_enable,    false);
+    check_bool("Case 12 slot2=disabled",    r.memory_cards.slot2_enable,    false);
+    check_bool("Case 12 mt1_slot2=enabled", r.memory_cards.multitap1_slot2, true);
+    check_bool("Case 12 mt1_slot3=enabled", r.memory_cards.multitap1_slot3, true);
+    check_bool("Case 12 mt1_slot4=enabled", r.memory_cards.multitap1_slot4, true);
+
+    // -------- Case 12b: Memory Cards default-when-unset --------
+    //
+    // Confirms that when the host returns NULL for every Memory Cards
+    // key (the "user has never opened the dialog" case), Resolved's
+    // struct defaults stand: both slots enabled, all 3 multitap slots
+    // disabled. This is the parity-with-standalone behavior introduced
+    // in Phase 3 — pre-Phase-3 had Slot2 default = false.
+    fake::reset();
+    // Intentionally do not set any pcsx2_mc_* keys.
+
+    r = ReadResolved(&fake_env_cb);
+    check_bool("Case 12b slot1 default=on",   r.memory_cards.slot1_enable,    true);
+    check_bool("Case 12b slot2 default=on",   r.memory_cards.slot2_enable,    true);
+    check_bool("Case 12b mt1_s2 default=off", r.memory_cards.multitap1_slot2, false);
+    check_bool("Case 12b mt1_s3 default=off", r.memory_cards.multitap1_slot3, false);
+    check_bool("Case 12b mt1_s4 default=off", r.memory_cards.multitap1_slot4, false);
 
     std::printf("\n%d failure(s)\n", failures);
     return failures == 0 ? 0 : 1;
