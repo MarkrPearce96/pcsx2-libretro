@@ -2,11 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0+
 
 #include "CoreOptions.h"
+#include "CoreOptionsEmulation.h"
 
-#ifdef SP7B_TEST_CORE_OPTIONS_ONLY
-// Standalone test mode: stub FrontendLog so this compiles without
-// the rest of pcsx2-libretro. The retro_log_level enum still comes
-// from libretro.h (included via CoreOptions.h).
+#ifdef CORE_OPTIONS_TEST_ONLY
 #include <cstdarg>
 #include <cstdio>
 static void FrontendLog(int /*level*/, const char* fmt, ...)
@@ -18,100 +16,54 @@ static void FrontendLog(int /*level*/, const char* fmt, ...)
     va_end(ap);
 }
 #else
-#include "LibretroFrontend.h"  // FrontendLog
+#include "LibretroFrontend.h"
 #endif
 
 #include <cstring>
 
-namespace
-{
-
-// Option schema. Field order per libretro.h:6646-6763:
-//   key, desc, desc_categorized, info, info_categorized, category_key,
-//   values[], default_value.
-//
-// Terminator: a fully-zeroed entry (the libretro spec requires this).
-//
-// Note: NULL for desc_categorized/info_categorized/category_key tells
-// the frontend to display these options uncategorized — RetroNest places
-// them under its own "Recommended" tab via SettingDef.category in the
-// host adapter.
-const retro_core_option_v2_definition kDefinitions[] = {
-    {
-        "pcsx2_renderer",
-        "GS Renderer",
-        nullptr,                          // desc_categorized
-        "PCSX2 graphics backend. Auto picks Metal on macOS. "
-        "Software runs on CPU only (much slower; useful for debugging "
-        "rendering bugs or for games with hardware-renderer regressions).",
-        nullptr,                          // info_categorized
-        nullptr,                          // category_key
-        {
-            { "auto",     "Auto" },
-            { "metal",    "Metal" },
-            { "software", "Software" },
-            { "null",     "Null" },
-            { nullptr,    nullptr },      // terminator
-        },
-        "auto",                           // default_value
-    },
-    {
-        "pcsx2_mtvu",
-        "Multi-Threaded VU1",
-        nullptr,
-        "Run the VU1 microprogram on its own thread instead of the EE thread. "
-        "Compatible with the vast majority of games; significantly reduces "
-        "EE-thread saturation on Apple Silicon's interpreter-only path. "
-        "Disable only if a specific game shows MTVU-related glitches.",
-        nullptr,
-        nullptr,
-        {
-            { "enabled",  "Enabled" },
-            { "disabled", "Disabled" },
-            { nullptr,    nullptr },
-        },
-        "enabled",
-    },
-    {
-        "pcsx2_fast_boot",
-        "Fast Boot",
-        nullptr,
-        "Skip the PS2 BIOS Sony intro and region-check screen on launch. "
-        "Disable if you want to see the BIOS screen (e.g. to verify your "
-        "BIOS region or to use the BIOS browser).",
-        nullptr,
-        nullptr,
-        {
-            { "enabled",  "Enabled" },
-            { "disabled", "Disabled" },
-            { nullptr,    nullptr },
-        },
-        "enabled",
-    },
-    // Terminator — zeroed entry per libretro.h:6787.
-    { nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, {{nullptr,nullptr}}, nullptr },
-};
-
-const retro_core_options_v2 kCoreOptionsV2 = {
-    nullptr,                              // categories — uncategorized
-    const_cast<retro_core_option_v2_definition*>(kDefinitions),
-};
-
-} // namespace
-
 namespace Pcsx2Libretro::CoreOptions
 {
+
+const std::vector<retro_core_option_v2_definition>& BuildDefinitions()
+{
+    // Function-local static — initialized once on first call, lives for the
+    // process lifetime, addresses are stable. libretro's SET_CORE_OPTIONS_V2
+    // requires the definitions array (and the strings it points at) to
+    // remain valid until retro_deinit. The strings are all literal — static
+    // by construction. The array storage lives here.
+    static const std::vector<retro_core_option_v2_definition> kAll = [] {
+        std::vector<retro_core_option_v2_definition> v;
+        v.reserve(8);  // tiny pre-reserve; future phases expand this.
+        Emulation::AppendDefinitions(v);
+        // libretro terminator — must be the final entry per libretro.h:6787.
+        v.push_back({
+            nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+            {{nullptr, nullptr}},
+            nullptr
+        });
+        return v;
+    }();
+    return kAll;
+}
 
 bool EmitCoreOptionsV2(retro_environment_t cb)
 {
     if (!cb) return false;
-    const bool ok = cb(RETRO_ENVIRONMENT_SET_CORE_OPTIONS_V2,
-                       const_cast<retro_core_options_v2*>(&kCoreOptionsV2));
+
+    // SET_CORE_OPTIONS_V2 wants a retro_core_options_v2 (categories +
+    // definitions). categories=nullptr → uncategorized; RetroNest's host
+    // adapter places these under SettingDef.category on its side.
+    retro_core_options_v2 opts{};
+    opts.categories  = nullptr;
+    opts.definitions = const_cast<retro_core_option_v2_definition*>(
+        BuildDefinitions().data());
+
+    const bool ok = cb(RETRO_ENVIRONMENT_SET_CORE_OPTIONS_V2, &opts);
     if (!ok) {
-        // Per libretro.h:2340, a false return signals that the host doesn't
-        // support option categories — the options themselves are still
-        // registered and GET_VARIABLE still works. We pass categories=nullptr
-        // anyway, so this is purely informational; user values still flow.
+        // Per libretro.h:2340, false means the host doesn't support option
+        // CATEGORIES — options themselves are still registered and
+        // GET_VARIABLE will work. We pass categories=nullptr anyway, so this
+        // is purely informational; user values still flow.
         FrontendLog(RETRO_LOG_WARN,
             "[CoreOptions] Host does not support core-option categories "
             "(options are still registered and GET_VARIABLE will work)");
@@ -121,38 +73,18 @@ bool EmitCoreOptionsV2(retro_environment_t cb)
 
 Resolved ReadResolved(retro_environment_t cb)
 {
-    Resolved r{};  // defaults: renderer=-1, mtvu=true, fast_boot=true
+    Resolved r{};
     if (!cb) return r;
 
-    auto query = [&cb](const char* key) -> const char* {
-        retro_variable var{};
-        var.key = key;
-        if (cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
-            return var.value;
-        return nullptr;
-    };
+    Emulation::Parse(cb, r.emulation);
 
-    if (const char* v = query("pcsx2_renderer")) {
-        if      (std::strcmp(v, "auto")     == 0) r.renderer = -1;
-        else if (std::strcmp(v, "metal")    == 0) r.renderer = 17;
-        else if (std::strcmp(v, "software") == 0) r.renderer = 13;
-        else if (std::strcmp(v, "null")     == 0) r.renderer = 11;
-        else {
-            FrontendLog(RETRO_LOG_WARN,
-                "[CoreOptions] Unknown renderer '%s'; defaulting to auto", v);
-            r.renderer = -1;
-        }
-    }
-
-    if (const char* v = query("pcsx2_mtvu"))
-        r.mtvu = (std::strcmp(v, "enabled") == 0);
-
-    if (const char* v = query("pcsx2_fast_boot"))
-        r.fast_boot = (std::strcmp(v, "enabled") == 0);
+    // Future phases append Graphics::Parse, Audio::Parse, MemoryCards::Parse here.
 
     FrontendLog(RETRO_LOG_INFO,
         "[CoreOptions] renderer=%d mtvu=%s fast_boot=%s",
-        r.renderer, r.mtvu ? "on" : "off", r.fast_boot ? "on" : "off");
+        r.emulation.renderer,
+        r.emulation.mtvu ? "on" : "off",
+        r.emulation.fast_boot ? "on" : "off");
 
     return r;
 }

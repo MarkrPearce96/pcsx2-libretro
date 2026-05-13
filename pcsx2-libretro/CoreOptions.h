@@ -1,20 +1,15 @@
 // SPDX-FileCopyrightText: 2026 Mark Pearce (RetroNest)
 // SPDX-License-Identifier: GPL-3.0+
 //
-// SP7b: Libretro core options for pcsx2-libretro.
+// SP7c Phase 0 onwards: each category card owns a sibling module
+// (CoreOptionsEmulation, CoreOptionsGraphics, ...) that exposes its slice
+// of the definitions table plus a Parse helper. This file is now the
+// thin aggregator that concatenates them at first-emit time.
 //
-// Declares the option schema emitted via SET_CORE_OPTIONS_V2 at
-// retro_set_environment time, and the typed result of reading the
-// host's stored user values at retro_load_game time.
-//
-// Three knobs (smallest valuable cut from the SP7b spec):
-//   * pcsx2_renderer  — GS renderer (auto/metal/software/null)
-//   * pcsx2_mtvu      — Multi-Threaded VU1
-//   * pcsx2_fast_boot — Fast boot (skip PS2 BIOS intro/region screen)
-//
-// Standalone unit-test gate: define SP7B_TEST_CORE_OPTIONS_ONLY when
-// compiling this .cpp directly into tools/test_core_options.cpp to skip
-// the FrontendLog dependency on the rest of pcsx2-libretro.
+// Standalone unit-test gate: define CORE_OPTIONS_TEST_ONLY when compiling
+// any CoreOptions*.cpp directly into tools/test_core_options.cpp to skip
+// the FrontendLog and MemorySettingsInterface dependencies on the rest of
+// pcsx2-libretro.
 
 #pragma once
 
@@ -22,19 +17,20 @@
 // include from the header. The test binary picks up the same header via
 // the -I flag in the test's compile command.
 #include "libretro.h"
+#include "CoreOptionsEmulation.h"
+
+#include <vector>
 
 namespace Pcsx2Libretro::CoreOptions
 {
 
-// Resolved values to feed into Settings.cpp / VMBootParameters.
-// Defaults match the SP7a-era hardcoded behavior so an old/missing
-// options.json or a host that doesn't support SET_CORE_OPTIONS_V2
-// produces identical results to today.
 struct Resolved
 {
-    int  renderer  = -1;    // GSRendererType integer: -1=Auto, 17=Metal, 13=SW, 11=Null
-    bool mtvu      = true;  // EmuCore/Speedhacks/vuThread
-    bool fast_boot = true;  // EmuCore/EnableFastBoot AND VMBootParameters.fast_boot
+    Pcsx2Libretro::CoreOptions::Emulation::Values emulation{};
+    // Future phases append:
+    //   Pcsx2Libretro::CoreOptions::Graphics::Values    graphics{};
+    //   Pcsx2Libretro::CoreOptions::Audio::Values       audio{};
+    //   Pcsx2Libretro::CoreOptions::MemoryCards::Values memory_cards{};
 };
 
 // Emit the option schema to the host. Call once from retro_set_environment
@@ -48,5 +44,15 @@ bool EmitCoreOptionsV2(retro_environment_t cb);
 // with a WARN logged. The fact of reading + the resolved triple are
 // logged at INFO once per call.
 Resolved ReadResolved(retro_environment_t cb);
+
+// Build (or return the cached) master option-definitions vector.
+// First call concatenates each category's AppendDefinitions output and
+// appends the libretro terminator. Subsequent calls return the same
+// vector by reference — the pointer-to-storage stays valid for the
+// process lifetime (function-local static).
+//
+// Exposed for test_core_options.cpp's structural assertions. Production
+// code reaches it indirectly through EmitCoreOptionsV2.
+const std::vector<retro_core_option_v2_definition>& BuildDefinitions();
 
 } // namespace Pcsx2Libretro::CoreOptions

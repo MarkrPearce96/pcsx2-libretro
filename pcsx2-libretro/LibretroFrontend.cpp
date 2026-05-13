@@ -509,7 +509,7 @@ RETRO_API bool retro_load_game(const struct retro_game_info* game)
     // value (PCSX2's VMManager::BootSystem reads this field directly).
     // Wire it to the same resolved.fast_boot the INI write uses, so the
     // user's choice applies at both layers.
-    params.fast_boot = resolved.fast_boot;
+    params.fast_boot = resolved.emulation.fast_boot;
 
     // SP6.5 Task 4.5: cold-resume on launch.
     //
