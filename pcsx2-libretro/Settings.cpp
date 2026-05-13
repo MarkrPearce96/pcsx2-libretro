@@ -311,6 +311,10 @@ void InitializeDefaults(const std::string& system_dir,
         const CoreOptions::Audio::Values audio_defaults{};
         CoreOptions::Audio::ApplyDefaults(
             g_si, options ? options->audio : audio_defaults);
+
+        const CoreOptions::MemoryCards::Values mc_defaults{};
+        CoreOptions::MemoryCards::ApplyDefaults(
+            g_si, options ? options->memory_cards : mc_defaults);
     }
 
     // Push the layered settings to the live Pcsx2Config so PCSX2's
