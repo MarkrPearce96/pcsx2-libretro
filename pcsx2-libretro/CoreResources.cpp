@@ -17,6 +17,25 @@
 namespace Pcsx2Libretro::CoreResources
 {
 
+namespace
+{
+    // Single source of truth for "is this serial's 4-char prefix one
+    // recognised by DetectRegionFromSerialPrefix?". Used by Tier-3 in
+    // DetectRegionFromSerial to decide whether the WARN log fires.
+    // If a new prefix is added to DetectRegionFromSerialPrefix below,
+    // it must be mirrored here, and vice versa.
+    bool IsKnownSerialPrefix(const std::string& serial)
+    {
+        if (serial.size() < 4)
+            return false;
+        const std::string p = serial.substr(0, 4);
+        return p == "SLES" || p == "SCES" || p == "SCED" || p == "SLED"
+            || p == "SCUS" || p == "SLUS" || p == "SCAJ" || p == "SLPS"
+            || p == "SLPM" || p == "SCKA" || p == "SLKA" || p == "SCKR"
+            || p == "PSXC";
+    }
+}
+
 #ifndef SP7A_TEST_PREFIX_ONLY
 std::string ResolveResourcesDir()
 {
@@ -60,24 +79,23 @@ DetectedRegion DetectRegionFromSerial(const std::string& serial)
         }
     }
 
-    // Tier 2: prefix heuristic.
+    // Tier 2: prefix heuristic. Log only when we actually have a serial
+    // to talk about — otherwise the line just emits "... on ''" and pairs
+    // awkwardly with the Tier-3 WARN below.
     const DetectedRegion by_prefix = DetectRegionFromSerialPrefix(serial);
-    FrontendLog(RETRO_LOG_INFO,
-        "[SP7a] region=%s fps=%.2f (prefix heuristic on '%s')",
-        by_prefix.libretro_region == PAL ? "PAL" : "NTSC",
-        by_prefix.fps, serial.c_str());
+    if (!serial.empty())
+    {
+        FrontendLog(RETRO_LOG_INFO,
+            "[SP7a] region=%s fps=%.2f (prefix heuristic on '%s')",
+            by_prefix.libretro_region == PAL ? "PAL" : "NTSC",
+            by_prefix.fps, serial.c_str());
+    }
 
-    // Tier 3 (warn for empty / clearly unknown serials). The prefix
-    // heuristic always returns SOMETHING, so this is purely diagnostic.
-    if (serial.empty()
-        || (serial.size() >= 4
-            && serial.substr(0, 4) != "SLES" && serial.substr(0, 4) != "SCES"
-            && serial.substr(0, 4) != "SCED" && serial.substr(0, 4) != "SLED"
-            && serial.substr(0, 4) != "SCUS" && serial.substr(0, 4) != "SLUS"
-            && serial.substr(0, 4) != "SCAJ" && serial.substr(0, 4) != "SLPS"
-            && serial.substr(0, 4) != "SLPM" && serial.substr(0, 4) != "SCKA"
-            && serial.substr(0, 4) != "SLKA" && serial.substr(0, 4) != "SCKR"
-            && serial.substr(0, 4) != "PSXC"))
+    // Tier 3: WARN for anything the prefix heuristic didn't recognise.
+    // The heuristic always returns SOMETHING (default NTSC), so this is
+    // purely diagnostic. Empty serials and 1-3 char serials are also
+    // caught here because IsKnownSerialPrefix returns false for them.
+    if (!IsKnownSerialPrefix(serial))
     {
         FrontendLog(RETRO_LOG_WARN,
             "[SP7a] Unknown disc serial '%s' — defaulting to NTSC", serial.c_str());
