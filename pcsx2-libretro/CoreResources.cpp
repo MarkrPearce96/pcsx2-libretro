@@ -54,7 +54,10 @@ DetectedRegion DetectRegionFromSerialPrefix(const std::string& serial)
         || prefix == "SCED" || prefix == "SLED")
         return {PAL, PAL_FPS};
 
-    // NTSC territories (US, Japan, Korea, Asia).
+    // NTSC territories (US, Japan, Korea, Asia). This branch is
+    // documentation-only — the fallthrough below also returns NTSC.
+    // It's retained so the known-NTSC prefix set is explicit at the
+    // call site rather than implicit via "everything not PAL".
     if (prefix == "SCUS" || prefix == "SLUS"
         || prefix == "SCAJ" || prefix == "SLPS" || prefix == "SLPM"
         || prefix == "SCKA" || prefix == "SLKA" || prefix == "SCKR"
