@@ -18,14 +18,14 @@ DetectedRegion DetectRegionFromSerial(const std::string& serial)
 {
     // Filled in by SP7a Task 3 (GameDB + prefix chain).
     (void)serial;
-    return {1u /* RETRO_REGION_NTSC */, 59.94};
+    return {0u /* RETRO_REGION_NTSC */, 59.94};
 }
 
 DetectedRegion DetectRegionFromSerialPrefix(const std::string& serial)
 {
     // Filled in by SP7a Task 2 (prefix heuristic).
     (void)serial;
-    return {1u /* RETRO_REGION_NTSC */, 59.94};
+    return {0u /* RETRO_REGION_NTSC */, 59.94};
 }
 
 std::optional<DetectedRegion> RegionFromGsVideoMode(GS_VideoMode mode)
