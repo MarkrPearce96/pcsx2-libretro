@@ -329,6 +329,98 @@ void AppendDefinitions(std::vector<retro_core_option_v2_definition>& out)
         },
         "disabled",
     });
+
+    // SP7c Phase 1 — Frame Pacing / Latency Control sub-group.
+    //
+    // libretro pacing note: the frontend (RetroNest) owns presentation in
+    // libretro mode, so VsyncEnable / UseVSyncForTiming may be cosmetic on
+    // this build (the actual vsync decision happens in CoreRuntime's
+    // present path). We expose them for parity with the standalone dialog
+    // and document the caveat in the tooltip.
+    out.push_back({
+        "pcsx2_vsync_queue_size",
+        "Maximum Frame Latency",
+        nullptr,
+        "Frames the GS can queue before the EE must wait. Lower values "
+        "reduce input latency at the cost of frame-pacing smoothness. "
+        "0 is the lowest-latency 'optimal' mode (re-paces every frame).",
+        nullptr,
+        nullptr,
+        {
+            { "0", "Optimal (Frame Pacing)" },
+            { "1", "1 frame" },
+            { "2", "2 frames" },
+            { "3", "3 frames" },
+            { nullptr, nullptr },
+        },
+        "2",
+    });
+
+    out.push_back({
+        "pcsx2_sync_to_host_rr",
+        "Sync to Host Refresh Rate",
+        nullptr,
+        "Adjust emulation speed slightly to align with the host display's "
+        "refresh rate. Reduces audio drift on non-60Hz monitors. May be "
+        "cosmetic in libretro mode — the frontend owns presentation timing.",
+        nullptr,
+        nullptr,
+        {
+            { "enabled",  "Enabled" },
+            { "disabled", "Disabled" },
+            { nullptr,    nullptr },
+        },
+        "disabled",
+    });
+
+    out.push_back({
+        "pcsx2_vsync",
+        "Vertical Sync (VSync)",
+        nullptr,
+        "Synchronize frame submission with the host display's vblank. "
+        "May be cosmetic in libretro mode — the frontend owns presentation.",
+        nullptr,
+        nullptr,
+        {
+            { "enabled",  "Enabled" },
+            { "disabled", "Disabled" },
+            { nullptr,    nullptr },
+        },
+        "disabled",
+    });
+
+    out.push_back({
+        "pcsx2_use_vsync_timing",
+        "Use Host VSync Timing",
+        nullptr,
+        "Drive emulation timing from host vsync instead of the emulated "
+        "console's refresh. Only takes effect when both VSync and "
+        "Sync to Host Refresh Rate are enabled.",
+        nullptr,
+        nullptr,
+        {
+            { "enabled",  "Enabled" },
+            { "disabled", "Disabled" },
+            { nullptr,    nullptr },
+        },
+        "disabled",
+    });
+
+    out.push_back({
+        "pcsx2_skip_duplicate_frames",
+        "Skip Presenting Duplicate Frames",
+        nullptr,
+        "Don't re-present a frame if the GS hasn't produced new output. "
+        "Saves a tiny amount of GPU time. Mostly cosmetic in libretro mode.",
+        nullptr,
+        nullptr,
+        {
+            { "enabled",  "Enabled" },
+            { "disabled", "Disabled" },
+            { nullptr,    nullptr },
+        },
+        "disabled",
+    });
 }
 
 void Parse(retro_environment_t cb, Values& out)
@@ -412,6 +504,13 @@ void Parse(retro_environment_t cb, Values& out)
     parse_bool("pcsx2_host_fs",        out.host_fs);
     parse_bool("pcsx2_cdvd_precache",  out.cdvd_precache);
     parse_bool("pcsx2_fast_boot_ff",   out.fast_boot_ff);
+
+    // SP7c Phase 1 — Frame Pacing parsing.
+    parse_int("pcsx2_vsync_queue_size", out.vsync_queue_size, 2);
+    parse_bool("pcsx2_sync_to_host_rr",       out.sync_to_host_rr);
+    parse_bool("pcsx2_vsync",                 out.vsync);
+    parse_bool("pcsx2_use_vsync_timing",      out.use_vsync_timing);
+    parse_bool("pcsx2_skip_duplicate_frames", out.skip_duplicate_frames);
 }
 
 #ifndef CORE_OPTIONS_TEST_ONLY
@@ -453,6 +552,13 @@ void ApplyDefaults(MemorySettingsInterface& si, const Values& v)
     si.SetBoolValue("EmuCore", "HostFs",                    v.host_fs);
     si.SetBoolValue("EmuCore", "CdvdPrecache",              v.cdvd_precache);
     si.SetBoolValue("EmuCore", "EnableFastBootFastForward", v.fast_boot_ff);
+
+    // SP7c Phase 1 — Frame Pacing.
+    si.SetIntValue ("EmuCore/GS", "VsyncQueueSize",       v.vsync_queue_size);
+    si.SetBoolValue("EmuCore/GS", "SyncToHostRefreshRate", v.sync_to_host_rr);
+    si.SetBoolValue("EmuCore/GS", "VsyncEnable",          v.vsync);
+    si.SetBoolValue("EmuCore/GS", "UseVSyncForTiming",    v.use_vsync_timing);
+    si.SetBoolValue("EmuCore/GS", "SkipDuplicateFrames",  v.skip_duplicate_frames);
 }
 #endif
 

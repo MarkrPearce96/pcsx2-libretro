@@ -299,6 +299,33 @@ int main()
     check_bool("Case 9 cdvd_precache",     r.emulation.cdvd_precache,   true);
     check_bool("Case 9 fast_boot_ff",      r.emulation.fast_boot_ff,    true);
 
+    // -------- Case 10: Frame Pacing round-trip --------
+    fake::reset();
+    fake::variables["pcsx2_renderer"]               = "auto";
+    fake::variables["pcsx2_mtvu"]                   = "enabled";
+    fake::variables["pcsx2_fast_boot"]              = "enabled";
+    fake::variables["pcsx2_vsync_queue_size"]       = "0";
+    fake::variables["pcsx2_sync_to_host_rr"]        = "enabled";
+    fake::variables["pcsx2_vsync"]                  = "enabled";
+    fake::variables["pcsx2_use_vsync_timing"]       = "enabled";
+    fake::variables["pcsx2_skip_duplicate_frames"]  = "disabled";
+
+    r = ReadResolved(&fake_env_cb);
+    check_int ("Case 10 vsync_queue_size=0",  r.emulation.vsync_queue_size,      0);
+    check_bool("Case 10 sync_to_host_rr",     r.emulation.sync_to_host_rr,       true);
+    check_bool("Case 10 vsync",               r.emulation.vsync,                 true);
+    check_bool("Case 10 use_vsync_timing",    r.emulation.use_vsync_timing,      true);
+    check_bool("Case 10 skip_duplicate=off",  r.emulation.skip_duplicate_frames, false);
+
+    // -------- Case 10b: parse_int fallback (garbled input → struct default) --------
+    fake::reset();
+    fake::variables["pcsx2_ee_cycle_rate"]   = "not-a-number";
+    fake::variables["pcsx2_vsync_queue_size"]= "also-garbage";
+
+    r = ReadResolved(&fake_env_cb);
+    check_int("Case 10b garbled ee_cycle_rate → default 0",  r.emulation.ee_cycle_rate,      0);
+    check_int("Case 10b garbled vsync_queue_size → default 2", r.emulation.vsync_queue_size, 2);
+
     std::printf("\n%d failure(s)\n", failures);
     return failures == 0 ? 0 : 1;
 }

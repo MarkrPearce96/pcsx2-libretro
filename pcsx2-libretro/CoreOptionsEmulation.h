@@ -46,6 +46,13 @@ struct Values
     bool host_fs        = false; // EmuCore/HostFs
     bool cdvd_precache  = false; // EmuCore/CdvdPrecache
     bool fast_boot_ff   = false; // EmuCore/EnableFastBootFastForward
+
+    // --- SP7c Phase 1: Frame Pacing / Latency Control (5 knobs) ---
+    int  vsync_queue_size      = 2;     // EmuCore/GS/VsyncQueueSize (0..3)
+    bool sync_to_host_rr       = false; // EmuCore/GS/SyncToHostRefreshRate
+    bool vsync                 = false; // EmuCore/GS/VsyncEnable
+    bool use_vsync_timing      = false; // EmuCore/GS/UseVSyncForTiming
+    bool skip_duplicate_frames = false; // EmuCore/GS/SkipDuplicateFrames
 };
 
 // Append this category's option definitions to the master vector.
