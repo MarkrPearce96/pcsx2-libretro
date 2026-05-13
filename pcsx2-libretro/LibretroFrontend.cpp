@@ -368,7 +368,7 @@ RETRO_API void retro_run(void)
                 if (g_frontend.environ_cb)
                     g_frontend.environ_cb(RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO, &av);
                 FrontendLog(RETRO_LOG_INFO,
-                    "[SP7a] region refined to %s fps=%.2f from gsVideoMode",
+                    "[Region] refined to %s fps=%.2f from gsVideoMode",
                     g_detected_region == RETRO_REGION_PAL ? "PAL" : "NTSC",
                     g_detected_fps);
             }
