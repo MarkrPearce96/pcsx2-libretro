@@ -230,9 +230,6 @@ void InitializeDefaults(const std::string& system_dir,
     // Disable achievements (avoid network init during boot).
     g_si.SetBoolValue("Achievements", "Enabled", false);
 
-    // Disable HostFS (we don't expose host filesystem to the VM).
-    g_si.SetBoolValue("EmuCore", "HostFs", false);
-
     // System console routes Console.WriteLn / Console.Error to stderr.
     // EnableVerbose was previously on to surface diagnostics during SP1-SP4
     // bring-up, but it forces LOGLEVEL_DEV which makes every DevCon.Warning()
