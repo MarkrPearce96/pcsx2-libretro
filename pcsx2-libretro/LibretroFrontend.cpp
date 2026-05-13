@@ -18,6 +18,7 @@
 #include "pcsx2/VMManager.h"
 #include "MemoryTypes.h"   // eeMem, Ps2MemSize::MainRam
 #include "CoreResources.h"
+#include "CoreOptions.h"
 
 #include <atomic>
 #include <chrono>
@@ -228,7 +229,13 @@ void TryIssueMemoryMaps()
 
 } // namespace
 
-RETRO_API void retro_set_environment(retro_environment_t cb)        { g_frontend.environ_cb     = cb; }
+RETRO_API void retro_set_environment(retro_environment_t cb)
+{
+    g_frontend.environ_cb = cb;
+    // SP7b: declare core options as soon as the env_cb is available.
+    // This is the only legal time per the libretro spec (before retro_init).
+    CoreOptions::EmitCoreOptionsV2(cb);
+}
 RETRO_API void retro_set_video_refresh(retro_video_refresh_t cb)    { g_frontend.video_cb       = cb; }
 RETRO_API void retro_set_audio_sample(retro_audio_sample_t cb)      { g_frontend.audio_cb       = cb; }
 RETRO_API void retro_set_audio_sample_batch(retro_audio_sample_batch_t cb) { g_frontend.audio_batch_cb = cb; }
@@ -486,14 +493,23 @@ RETRO_API bool retro_load_game(const struct retro_game_info* game)
     }
     FrontendLog(RETRO_LOG_INFO, "Found PS2 BIOS: %s", bios_path.c_str());
 
+    // SP7b: read user-tweaked core options once at load time. Renderer,
+    // MTVU, and FastBoot all take effect at VM init / boot — none are
+    // safe to swap mid-run, so "restart to apply" UX is intentional.
+    const auto resolved = CoreOptions::ReadResolved(g_frontend.environ_cb);
+
     // 2. Populate the in-memory settings layer.
     const std::string save_dir = GetSaveDirectory();
-    Pcsx2Libretro::Settings::InitializeDefaults(system_dir, save_dir);
+    Pcsx2Libretro::Settings::InitializeDefaults(system_dir, save_dir, &resolved);
 
     // 3. Build VMBootParameters and start the emu thread.
     VMBootParameters params{};
     params.filename = game->path;
-    params.fast_boot = true;
+    // SP7b: VMBootParameters.fast_boot overrides the INI EnableFastBoot
+    // value (PCSX2's VMManager::BootSystem reads this field directly).
+    // Wire it to the same resolved.fast_boot the INI write uses, so the
+    // user's choice applies at both layers.
+    params.fast_boot = resolved.fast_boot;
 
     // SP6.5 Task 4.5: cold-resume on launch.
     //
