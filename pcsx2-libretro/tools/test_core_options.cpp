@@ -162,15 +162,21 @@ int main()
                fake::emitted_keys.size() > 2
                && str_eq(fake::emitted_keys[2], "pcsx2_fast_boot"), true);
 
-    // -------- Case 6: BuildDefinitions returns the expected category structure --------
+    // -------- Case 6: BuildDefinitions retains SP7b's 3 keys at the head, terminator at the tail --------
     //
-    // SP7c Phase 0: assert that the master definitions table built by
-    // BuildDefinitions() contains exactly the 3 SP7b knobs in the documented
-    // order, plus the libretro terminator. Future SP7c phases extend this.
+    // SP7c Phase 1+ adds more knobs; this case is a regression sentinel,
+    // not a count fixture. Per-knob sanity is covered by Case 7's data-driven
+    // sweep. Three invariants:
+    //   1. The first 3 keys are still pcsx2_renderer / pcsx2_mtvu / pcsx2_fast_boot
+    //      in that order (SP7b call-site ordering must not regress).
+    //   2. Total entries strictly greater than 4 once Phase 1 lands (>= 19 after
+    //      all 15 Phase-1 knobs); Phase 0 leaves it at 4. We assert >= 4 here
+    //      and let Case 7 catch sub-entry shape.
+    //   3. The final entry is the libretro terminator (key == nullptr).
     {
         const auto& defs = BuildDefinitions();
-        check_int("Case 6 count = 4 (3 knobs + terminator)",
-                  static_cast<int>(defs.size()), 4);
+        check_bool("Case 6 size >= 4 (SP7b minimum)",
+                   defs.size() >= 4, true);
 
         if (defs.size() >= 4) {
             check_bool("Case 6 [0].key = pcsx2_renderer",
@@ -179,8 +185,9 @@ int main()
                        defs[1].key && std::strcmp(defs[1].key, "pcsx2_mtvu") == 0, true);
             check_bool("Case 6 [2].key = pcsx2_fast_boot",
                        defs[2].key && std::strcmp(defs[2].key, "pcsx2_fast_boot") == 0, true);
-            check_bool("Case 6 [3] terminator (key == nullptr)",
-                       defs[3].key == nullptr, true);
+            const auto& last = defs.back();
+            check_bool("Case 6 last entry is terminator",
+                       last.key == nullptr, true);
         }
     }
 
