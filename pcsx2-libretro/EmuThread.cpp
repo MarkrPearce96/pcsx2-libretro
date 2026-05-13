@@ -52,6 +52,16 @@ bool EmuThread::Start(const VMBootParameters& boot_params)
     m_init_done.store(false);
     m_init_success.store(false);
     m_thread_started.store(false);
+    // SP6.5 Task 4.8: g_emu_thread is a singleton reused across Start/Join
+    // cycles. RequestShutdown() leaves m_stop_requested=true and ThreadFunc
+    // leaves m_thread_done=true; without resetting them here, the next
+    // Start()'s ThreadFunc enters its loop, sees m_stop_requested already
+    // set, transitions straight to Stopping, and tears the VM down right
+    // after SET_MEMORY_MAPS — leaving rcheevos with stale eeMem pointers
+    // when its async HTTP roundtrip completes (crash: rc_libretro_memory_read
+    // SIGSEGV against unmapped pages).
+    m_stop_requested.store(false);
+    m_thread_done.store(false);
 
     m_thread = std::thread(&EmuThread::ThreadFunc, this, boot_params);
 
