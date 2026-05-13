@@ -184,6 +184,54 @@ int main()
         }
     }
 
+    // -------- Case 7: structural sanity for every definition --------
+    //
+    // For every non-terminator definition:
+    //   - key is non-NULL
+    //   - desc is non-NULL
+    //   - default_value is non-NULL and appears in values[]
+    //   - values[] has at least one non-terminator entry
+    //   - values[] is itself terminated by {nullptr, nullptr}
+    //
+    // This catches accidental missing fields when adding new options.
+    {
+        const auto& defs = BuildDefinitions();
+        std::map<std::string, int> key_counts;
+
+        for (size_t i = 0; i + 1 < defs.size(); ++i) {
+            const auto& d = defs[i];
+            check_bool("Case 7 key non-null",   d.key != nullptr, true);
+            check_bool("Case 7 desc non-null",  d.desc != nullptr, true);
+            check_bool("Case 7 default non-null", d.default_value != nullptr, true);
+
+            // Look up default in values[].
+            bool default_in_values = false;
+            int values_count = 0;
+            for (const auto& vp : d.values) {
+                if (vp.value == nullptr) break;
+                ++values_count;
+                if (d.default_value && std::strcmp(vp.value, d.default_value) == 0)
+                    default_in_values = true;
+            }
+            check_bool("Case 7 values has at least 1 entry", values_count >= 1, true);
+            check_bool("Case 7 default appears in values", default_in_values, true);
+
+            if (d.key)
+                ++key_counts[d.key];
+        }
+
+        // No duplicate keys.
+        for (const auto& [k, c] : key_counts) {
+            check_int(("Case 7 unique key " + k).c_str(), c, 1);
+        }
+
+        // The last entry must be the terminator.
+        if (!defs.empty()) {
+            const auto& last = defs.back();
+            check_bool("Case 7 last entry is terminator", last.key == nullptr, true);
+        }
+    }
+
     std::printf("\n%d failure(s)\n", failures);
     return failures == 0 ? 0 : 1;
 }
