@@ -28,6 +28,14 @@ struct Values
     int  renderer  = -1;    // GSRendererType: -1=Auto, 17=Metal, 13=SW, 11=Null
     bool mtvu      = true;  // EmuCore/Speedhacks/vuThread
     bool fast_boot = true;  // EmuCore/EnableFastBoot AND VMBootParameters.fast_boot
+
+    // --- SP7c Phase 1: Speed Control (3 knobs) ---
+    // Framerate scalars. INI writes as float via SetFloatValue;
+    // PCSX2's ToChars produces shortest-form strings ("1", "0.5", "2", etc.).
+    // Value 0.0 maps to "Unlimited".
+    float normal_speed       = 1.0f;  // Framerate/NominalScalar
+    float fast_forward_speed = 2.0f;  // Framerate/TurboScalar
+    float slow_motion_speed  = 0.5f;  // Framerate/SlomoScalar
 };
 
 // Append this category's option definitions to the master vector.
