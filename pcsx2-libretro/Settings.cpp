@@ -4,6 +4,7 @@
 #include "PrecompiledHeader.h"
 
 #include "Settings.h"
+#include "CoreResources.h"
 #include "LibretroFrontend.h"
 
 #include "common/Error.h"
@@ -146,17 +147,14 @@ void InitializeDefaults(const std::string& system_dir,
     // if the directory doesn't exist, but we continue regardless.
     EmuFolders::SetResourcesDirectory();
 
-    // SP3: SetResourcesDirectory() on macOS uses CocoaTools::GetResourcePath()
+    // SP7a: SetResourcesDirectory() on macOS uses CocoaTools::GetResourcePath()
     // which returns the running app bundle's Resources dir (RetroNest's).
     // RetroNest's bundle doesn't have PCSX2's metallibs / patches.zip /
-    // gamedb.yaml. Override directly to pcsx2-master's bin/resources/.
-    //
-    // TODO: hardcoded absolute path for SP3 MVP. SP7 (settings) should
-    // derive this from dladdr() on our dylib + a known relative offset,
-    // or have RetroNest copy these resources into a location adjacent
-    // to the dylib at install time.
-    EmuFolders::Resources =
-        "/Users/mark/Documents/Projects/pcsx2-libretro/bin/resources";
+    // gamedb.yaml. Resolve at runtime via dladdr → <dylib_dir>/pcsx2_libretro_resources/.
+    // RetroNest's install layout must place the resources directory next
+    // to the dylib (see SP7a plan Task 7 for the rsync step).
+    const std::string resources_dir = CoreResources::ResolveResourcesDir();
+    EmuFolders::Resources = resources_dir;
     {
         Error err;
         if (!EmuFolders::SetDataDirectory(&err))
@@ -190,19 +188,10 @@ void InitializeDefaults(const std::string& system_dir,
     // Now override the SP2-required minimums.
     g_si.SetStringValue("Folders", "Bios", system_dir.c_str());
 
-    // SP3: point Folders/Resources at pcsx2-master's bin/resources/ so
-    // GSDeviceMTL can load Metal22.metallib / Metal23.metallib / default.metallib
-    // and PCSX2 can load patches.zip / gamedb.yaml / etc. Without this,
-    // GSDeviceMTL::Create silently fails (m_dev.IsOk() returns false
-    // when the shader library doesn't load) and AcquireWindow is never
-    // called.
-    //
-    // TODO: this is a hardcoded absolute path for SP3 MVP. SP7 (settings)
-    // should derive this from a runtime path (e.g. dladdr() on this dylib
-    // to find its on-disk location, then a known relative offset), or
-    // have RetroNest copy these resources next to the dylib at install time.
-    g_si.SetStringValue("Folders", "Resources",
-        "/Users/mark/Documents/Projects/pcsx2-libretro/bin/resources");
+    // SP7a: point Folders/Resources at the dladdr-derived path resolved
+    // above. GSDeviceMTL needs this to load Metal22/23/default.metallib;
+    // PCSX2 also reads patches.zip / gamedb.yaml from here.
+    g_si.SetStringValue("Folders", "Resources", resources_dir.c_str());
 
     // SP3: switched from Null (11) to Auto (-1). The Null renderer was
     // appropriate in SP2 when we had no display surface. SP3 provides a
