@@ -113,6 +113,13 @@ Resolved ReadResolved(retro_environment_t cb)
         e.use_vsync_timing ? "on" : "off",
         e.skip_duplicate_frames ? "on" : "off");
 
+    const auto& a = r.audio;
+    FrontendLog(RETRO_LOG_INFO,
+        "[CoreOptions] audio: sync_mode=%s buffer_ms=%d volume=%d "
+        "ff_volume=%d muted=%s",
+        a.sync_mode.c_str(), a.buffer_ms, a.volume, a.ff_volume,
+        a.muted ? "on" : "off");
+
     return r;
 }
 
