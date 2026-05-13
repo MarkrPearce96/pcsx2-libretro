@@ -47,23 +47,38 @@ CORE_BLOCK_RE = re.compile(
 # The terminator pair is {nullptr, nullptr} — we skip those.
 VALUE_PAIR_RE = re.compile(r'\{\s*"([^"]+)"\s*,\s*"[^"]*"\s*\}')
 
-# Host-side: s.append(opt(...)) with positional args. The current
-# pcsx2_libretro_adapter.cpp uses a helper:
-#   s.append(opt("pcsx2_renderer", "GS Renderer", "auto",
-#                {{"Auto", "auto"}, {"Metal", "metal"}, ...},
+# Host-side: s.append(opt(...)) with positional args. As of SP7c Phase 1
+# Task 2, opt() takes (category, group, key, label, default, values,
+# tooltip[, dependsOn]).
+#   s.append(opt("Emulation", "Speed Control",
+#                "pcsx2_normal_speed", "Normal Speed", "1",
+#                {{"100% ...", "1"}, ...},
 #                "tooltip..."));
-# We pull the key, the default, and the {label, stored_value} pairs from the
-# initializer list (pairs in host are (label, value) — opposite order from
-# core's (value, label)).
+# Older two-argument-prefix variants (without the leading category/group
+# pair) are no longer supported — every call site was migrated at the
+# same commit. We pull the key, the default, and the {label,
+# stored_value} pairs from the initializer list (pairs in host are
+# (label, value) — opposite order from core's (value, label)).
 HOST_BLOCK_RE = re.compile(
     r's\.append\(\s*opt\(\s*'
+    r'"[^"]+"\s*,\s*'                  # category
+    r'"[^"]+"\s*,\s*'                  # group
     r'"(?P<key>[^"]+)"\s*,\s*'         # key
     r'"[^"]*"\s*,\s*'                  # label
-    r'"(?P<default>[^"]+)"\s*,\s*'     # default value
-    r'\{(?P<values>.*?)\}\s*,\s*'      # values list {{"Label", "value"}, ...}
+    r'"(?P<default>[^"]+)"\s*,\s*'     # default value (or speedOptions identifier handled below)
+    r'(?:\{(?P<values>.*?)\}|(?P<values_ref>[A-Za-z_][A-Za-z0-9_]*))\s*,\s*'
     r'(?:"[^"]*"\s*)+'                 # tooltip (one or more adjacent string literals)
+    r'(?:,\s*"[^"]*"\s*)?'             # optional dependsOn string
     r'\)\s*\)',
     re.DOTALL,
+)
+
+# When a host opt() call passes a values identifier (e.g. `speedOptions`)
+# instead of an inline initializer, we resolve it by finding the matching
+# `const QVector<QPair<QString,QString>> <ident> = { ... };` block.
+HOST_VALUES_REF_RE_TEMPLATE = (
+    r'const\s+QVector<QPair<QString\s*,\s*QString>>\s+{ident}\s*=\s*'
+    r'\{{(?P<values>.*?)\}}\s*;'
 )
 
 HOST_PAIR_RE = re.compile(r'\{\s*"[^"]*"\s*,\s*"([^"]+)"\s*\}')
@@ -85,6 +100,19 @@ def parse_core(paths):
     return found
 
 
+def _resolve_values_ref(text, ident):
+    """Look up a local `const QVector<QPair<QString,QString>> <ident> = {...};`
+    declaration and return its set of stored values."""
+    pattern = re.compile(
+        HOST_VALUES_REF_RE_TEMPLATE.format(ident=re.escape(ident)),
+        re.DOTALL,
+    )
+    m = pattern.search(text)
+    if not m:
+        return None
+    return {v for v in HOST_PAIR_RE.findall(m.group("values"))}
+
+
 def parse_host(path):
     """Return {key: {"default": str, "values": set[str]}}."""
     found = {}
@@ -92,7 +120,19 @@ def parse_host(path):
     for m in HOST_BLOCK_RE.finditer(text):
         key = m.group("key")
         default = m.group("default")
-        values = {v for v in HOST_PAIR_RE.findall(m.group("values"))}
+        if m.group("values") is not None:
+            values = {v for v in HOST_PAIR_RE.findall(m.group("values"))}
+        else:
+            ident = m.group("values_ref")
+            resolved = _resolve_values_ref(text, ident)
+            if resolved is None:
+                print(
+                    f"ERROR: host key '{key}' references values identifier '{ident}' "
+                    f"but no matching declaration was found in {path}",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+            values = resolved
         # Multiple host rows can reference the same core key (Recommended
         # re-displays detailed-card rows). Merge values; flag mismatch on default.
         if key in found:
