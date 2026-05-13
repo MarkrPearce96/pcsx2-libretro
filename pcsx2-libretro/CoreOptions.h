@@ -19,6 +19,7 @@
 #include "libretro.h"
 #include "CoreOptionsEmulation.h"
 #include "CoreOptionsAudio.h"
+#include "CoreOptionsMemoryCards.h"
 
 #include <vector>
 
@@ -27,11 +28,11 @@ namespace Pcsx2Libretro::CoreOptions
 
 struct Resolved
 {
-    Pcsx2Libretro::CoreOptions::Emulation::Values emulation{};
-    Pcsx2Libretro::CoreOptions::Audio::Values     audio{};
+    Pcsx2Libretro::CoreOptions::Emulation::Values    emulation{};
+    Pcsx2Libretro::CoreOptions::Audio::Values        audio{};
+    Pcsx2Libretro::CoreOptions::MemoryCards::Values  memory_cards{};
     // Future phases append:
     //   Pcsx2Libretro::CoreOptions::Graphics::Values    graphics{};
-    //   Pcsx2Libretro::CoreOptions::MemoryCards::Values memory_cards{};
 };
 
 // Emit the option schema to the host. Call once from retro_set_environment
