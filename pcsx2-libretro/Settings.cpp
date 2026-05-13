@@ -256,15 +256,18 @@ void InitializeDefaults(const std::string& system_dir,
 
     WriteDefaultPadBindings(g_si);
 
-    // SP6: configure memory cards.
+    // SP6 / SP7c-Phase-3: configure memory cards.
     //
-    // Slot 1: enabled, file-image type, "Mcd001.ps2" (PCSX2 standard).
+    // Filenames: hardcoded "Mcd001.ps2" / "Mcd002.ps2" (PCSX2 standard).
     //   PCSX2 auto-detects MemoryCardType::File from the .ps2 extension
-    //   at MemoryCardFile.cpp load time, and auto-creates the file on
-    //   first save. No Slot1_Type key needed.
+    //   at MemoryCardFile.cpp load time and auto-creates the file on
+    //   first write. Filenames are NOT user-tweakable — libretro core
+    //   options are Combo-only, not free-form strings.
     //
-    // Slot 2: disabled. Single-slot is the libretro convention; SP7
-    //   settings UI may expose a toggle later.
+    // Slot{1,2} enable + Multitap1 slot enables: now user-tweakable via
+    //   CoreOptions::MemoryCards (per-call ApplyDefaults below). Defaults
+    //   match the standalone PCSX2 dialog (both slots enabled, multitap
+    //   slots disabled).
     //
     // Folders/MemoryCards: rooted at libretro save_dir so each
     //   {game_id}/ scope gets its own memcard image (RetroNest's
@@ -282,9 +285,11 @@ void InitializeDefaults(const std::string& system_dir,
             "Host did not provide save_dir — memcards will use PCSX2 default location");
     }
 
-    g_si.SetBoolValue  ("MemoryCards", "Slot1_Enable",   true);
+    // Slot{1,2}_Enable are now owned by CoreOptions::MemoryCards::ApplyDefaults
+    // (called from the per-call user-options block below) so dialog tweaks
+    // take effect on the next retro_load_game. Filenames stay hardcoded
+    // here — libretro core options are Combo-only.
     g_si.SetStringValue("MemoryCards", "Slot1_Filename", "Mcd001.ps2");
-    g_si.SetBoolValue  ("MemoryCards", "Slot2_Enable",   false);
     g_si.SetStringValue("MemoryCards", "Slot2_Filename", "Mcd002.ps2");
 
         g_initialized = true;

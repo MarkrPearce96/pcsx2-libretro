@@ -123,6 +123,16 @@ Resolved ReadResolved(retro_environment_t cb)
         a.sync_mode.c_str(), a.buffer_ms, a.volume, a.ff_volume,
         a.muted ? "on" : "off");
 
+    const auto& m = r.memory_cards;
+    FrontendLog(RETRO_LOG_INFO,
+        "[CoreOptions] memory_cards: slot1=%s slot2=%s mt1_s2=%s "
+        "mt1_s3=%s mt1_s4=%s",
+        m.slot1_enable    ? "on" : "off",
+        m.slot2_enable    ? "on" : "off",
+        m.multitap1_slot2 ? "on" : "off",
+        m.multitap1_slot3 ? "on" : "off",
+        m.multitap1_slot4 ? "on" : "off");
+
     return r;
 }
 
