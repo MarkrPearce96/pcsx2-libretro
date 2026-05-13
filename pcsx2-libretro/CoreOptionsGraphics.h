@@ -71,7 +71,17 @@ struct Values
     } display;
 
     struct Rendering {
-        // Phase 4 Task 3 fills these.
+        // 7 knobs mirroring standalone PCSX2 Graphics/Rendering sub-tab.
+        // All stored as INI under [EmuCore/GS]. Defaults match
+        // pcsx2_adapter.cpp Graphics/Rendering rows verbatim so a missing
+        // options.json reproduces standalone's out-of-the-box behavior.
+        int  upscale_multiplier      = 1;   // 1x Native
+        int  filter                  = 2;   // Bilinear (PS2)
+        int  tri_filter              = -1;  // Auto
+        int  max_anisotropy          = 0;   // Off
+        int  dithering_ps2           = 2;   // Unscaled
+        int  accurate_blending_unit  = 1;   // Basic
+        bool hw_mipmap               = true;
     } rendering;
 
     struct TextureReplacement {

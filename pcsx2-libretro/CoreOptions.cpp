@@ -155,6 +155,14 @@ Resolved ReadResolved(retro_environment_t cb)
         gd.disable_interlace_offset     ? "on" : "off",
         gd.pcrtc_overscan               ? "on" : "off");
 
+    const auto& gr = r.graphics.rendering;
+    FrontendLog(RETRO_LOG_INFO,
+        "[CoreOptions] graphics.rendering: upscale=%d filter=%d "
+        "trifilter=%d maxaniso=%d dither=%d blendaccu=%d mipmap=%s",
+        gr.upscale_multiplier, gr.filter, gr.tri_filter,
+        gr.max_anisotropy, gr.dithering_ps2, gr.accurate_blending_unit,
+        gr.hw_mipmap ? "on" : "off");
+
     return r;
 }
 

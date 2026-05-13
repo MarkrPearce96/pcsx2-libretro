@@ -378,6 +378,152 @@ void AppendDefinitions(std::vector<retro_core_option_v2_definition>& out)
         },
         "disabled",
     });
+
+    // ── Rendering sub-tab (7 knobs) — Phase 4 Task 3 ───────────────────
+    //
+    // Standalone exposes upscale_multiplier as a 12-step slider (1x–12x)
+    // and MaxAnisotropy as a 0–16 slider; the libretro variant mirrors
+    // standalone's enumerated stops verbatim (pcsx2_adapter.cpp:451-503).
+    // Value strings are the INI ints as strings — Apply maps via
+    // SetIntValue. filter's dependsOn (TriFilter!=2 && TriFilter!=3) is
+    // expressed on the host side as the libretro-key form
+    // (pcsx2_tri_filter!=2 && pcsx2_tri_filter!=3).
+    out.push_back({
+        "pcsx2_upscale_multiplier",
+        "Internal Resolution",
+        nullptr,
+        "Sets the internal rendering resolution. Higher values produce "
+        "sharper visuals at the cost of GPU performance.",
+        nullptr,
+        nullptr,
+        {
+            { "1",  "1x Native (PS2) (Default)" },
+            { "2",  "2x Native (~720px/HD)" },
+            { "3",  "3x Native (~1080px/FHD)" },
+            { "4",  "4x Native (~1440px/QHD)" },
+            { "5",  "5x Native (~1800px/QHD+)" },
+            { "6",  "6x Native (~2160px/4K UHD)" },
+            { "7",  "7x Native (~2520px)" },
+            { "8",  "8x Native (~2880px/5K UHD)" },
+            { "9",  "9x Native (~3240px)" },
+            { "10", "10x Native (~3600px/6K UHD)" },
+            { "11", "11x Native (~3960px)" },
+            { "12", "12x Native (~4320px/8K UHD)" },
+            { nullptr, nullptr },
+        },
+        "1",
+    });
+
+    out.push_back({
+        "pcsx2_filter",
+        "Texture Filtering",
+        nullptr,
+        "Controls how textures are sampled when rendered. Bilinear (PS2) "
+        "matches the original hardware behavior; Forced options ignore "
+        "the game's preference.",
+        nullptr,
+        nullptr,
+        {
+            { "0", "Nearest" },
+            { "1", "Bilinear (Forced)" },
+            { "2", "Bilinear (PS2) (Default)" },
+            { "3", "Bilinear (Forced excluding sprite)" },
+            { nullptr, nullptr },
+        },
+        "2",
+    });
+
+    out.push_back({
+        "pcsx2_tri_filter",
+        "Trilinear Filtering",
+        nullptr,
+        "Enables trilinear filtering for smoother transitions between "
+        "mipmap levels. Auto leaves this decision to each game.",
+        nullptr,
+        nullptr,
+        {
+            { "-1", "Auto (Default)" },
+            { "0",  "Off" },
+            { "1",  "Trilinear (PS2)" },
+            { "2",  "Trilinear (Forced)" },
+            { nullptr, nullptr },
+        },
+        "-1",
+    });
+
+    out.push_back({
+        "pcsx2_max_anisotropy",
+        "Anisotropic Filtering",
+        nullptr,
+        "Improves texture clarity at oblique viewing angles. Low cost on "
+        "modern GPUs and generally safe to raise.",
+        nullptr,
+        nullptr,
+        {
+            { "0",  "Off (Default)" },
+            { "2",  "2x" },
+            { "4",  "4x" },
+            { "8",  "8x" },
+            { "16", "16x" },
+            { nullptr, nullptr },
+        },
+        "0",
+    });
+
+    out.push_back({
+        "pcsx2_dithering_ps2",
+        "Dithering",
+        nullptr,
+        "Controls how PS2 dithering patterns are applied to upscaled "
+        "rendering. Unscaled matches the original appearance.",
+        nullptr,
+        nullptr,
+        {
+            { "0", "Off" },
+            { "1", "Scaled" },
+            { "2", "Unscaled (Default)" },
+            { "3", "Force 32bit" },
+            { nullptr, nullptr },
+        },
+        "2",
+    });
+
+    out.push_back({
+        "pcsx2_accurate_blending_unit",
+        "Blending Accuracy",
+        nullptr,
+        "Controls how accurately PS2 blending operations are emulated. "
+        "Higher levels improve compatibility with heavy effects at a "
+        "performance cost.",
+        nullptr,
+        nullptr,
+        {
+            { "0", "Minimum" },
+            { "1", "Basic (Default)" },
+            { "2", "Medium" },
+            { "3", "High" },
+            { "4", "Full" },
+            { "5", "Maximum" },
+            { nullptr, nullptr },
+        },
+        "1",
+    });
+
+    out.push_back({
+        "pcsx2_hw_mipmap",
+        "Hardware Mipmapping",
+        nullptr,
+        "Emulates PS2 mipmapping when the hardware renderer is active. "
+        "Fixes texture aliasing at distance in supported games.",
+        nullptr,
+        nullptr,
+        {
+            { "enabled",  "Enabled" },
+            { "disabled", "Disabled" },
+            { nullptr,    nullptr },
+        },
+        "enabled",
+    });
 }
 
 void Parse(retro_environment_t cb, Values& out)
@@ -439,6 +585,22 @@ void Parse(retro_environment_t cb, Values& out)
         out.display.disable_interlace_offset = parse_bool(v);
     if (const char* v = query("pcsx2_pcrtc_overscan"))
         out.display.pcrtc_overscan = parse_bool(v);
+
+    // ── Rendering sub-tab ──
+    if (const char* v = query("pcsx2_upscale_multiplier"))
+        out.rendering.upscale_multiplier = parse_int(v, 1);
+    if (const char* v = query("pcsx2_filter"))
+        out.rendering.filter = parse_int(v, 2);
+    if (const char* v = query("pcsx2_tri_filter"))
+        out.rendering.tri_filter = parse_int(v, -1);
+    if (const char* v = query("pcsx2_max_anisotropy"))
+        out.rendering.max_anisotropy = parse_int(v, 0);
+    if (const char* v = query("pcsx2_dithering_ps2"))
+        out.rendering.dithering_ps2 = parse_int(v, 2);
+    if (const char* v = query("pcsx2_accurate_blending_unit"))
+        out.rendering.accurate_blending_unit = parse_int(v, 1);
+    if (const char* v = query("pcsx2_hw_mipmap"))
+        out.rendering.hw_mipmap = parse_bool(v);
 }
 
 #ifndef CORE_OPTIONS_TEST_ONLY
@@ -471,6 +633,15 @@ void ApplyDefaults(MemorySettingsInterface& si, const Values& v)
     si.SetBoolValue("EmuCore/GS", "pcrtc_offsets",            v.display.pcrtc_offsets);
     si.SetBoolValue("EmuCore/GS", "disable_interlace_offset", v.display.disable_interlace_offset);
     si.SetBoolValue("EmuCore/GS", "pcrtc_overscan",           v.display.pcrtc_overscan);
+
+    // ── Rendering sub-tab ──
+    si.SetIntValue ("EmuCore/GS", "upscale_multiplier",     v.rendering.upscale_multiplier);
+    si.SetIntValue ("EmuCore/GS", "filter",                 v.rendering.filter);
+    si.SetIntValue ("EmuCore/GS", "TriFilter",              v.rendering.tri_filter);
+    si.SetIntValue ("EmuCore/GS", "MaxAnisotropy",          v.rendering.max_anisotropy);
+    si.SetIntValue ("EmuCore/GS", "dithering_ps2",          v.rendering.dithering_ps2);
+    si.SetIntValue ("EmuCore/GS", "accurate_blending_unit", v.rendering.accurate_blending_unit);
+    si.SetBoolValue("EmuCore/GS", "hw_mipmap",              v.rendering.hw_mipmap);
 }
 #endif
 

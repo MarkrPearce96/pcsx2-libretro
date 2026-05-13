@@ -444,6 +444,43 @@ int main()
     check_bool("Case 13b pcrtc_antiblur default=on",
                 r.graphics.display.pcrtc_antiblur, true);
 
+    // -------- Case 14: Graphics/Rendering round-trip --------
+    //
+    // SP7c Phase 4 Task 3 representative test for the Rendering sub-tab.
+    // Picks knobs across the value-encoding flavors:
+    //   - int-valued combo (upscale_multiplier: 4 — an enumerated stop)
+    //   - int-valued combo with dependsOn (filter: 3)
+    //   - bool toggled away from struct default (hw_mipmap: disabled,
+    //     since the default is true — flipping to false proves Parse
+    //     runs vs. silent default bleed-through)
+    fake::reset();
+    fake::variables["pcsx2_upscale_multiplier"] = "4";
+    fake::variables["pcsx2_filter"]             = "3";
+    fake::variables["pcsx2_hw_mipmap"]          = "disabled";
+
+    r = ReadResolved(&fake_env_cb);
+    check_int ("Case 14 upscale_multiplier=4", r.graphics.rendering.upscale_multiplier, 4);
+    check_int ("Case 14 filter=3",             r.graphics.rendering.filter,             3);
+    check_bool("Case 14 hw_mipmap=off",        r.graphics.rendering.hw_mipmap,          false);
+
+    // -------- Case 14b: Graphics/Rendering default-when-unset --------
+    //
+    // Confirms struct defaults match standalone's per-row defaults when
+    // no env-var is set. The hw_mipmap default-true case is the critical
+    // one — it would catch a "missing = true initializer" regression in
+    // Values::Rendering. tri_filter=-1 catches negative-default parsing.
+    fake::reset();
+
+    r = ReadResolved(&fake_env_cb);
+    check_int ("Case 14b upscale_multiplier default=1",
+                r.graphics.rendering.upscale_multiplier, 1);
+    check_int ("Case 14b filter default=2",
+                r.graphics.rendering.filter, 2);
+    check_int ("Case 14b tri_filter default=-1",
+                r.graphics.rendering.tri_filter, -1);
+    check_bool("Case 14b hw_mipmap default=on",
+                r.graphics.rendering.hw_mipmap, true);
+
     std::printf("\n%d failure(s)\n", failures);
     return failures == 0 ? 0 : 1;
 }
