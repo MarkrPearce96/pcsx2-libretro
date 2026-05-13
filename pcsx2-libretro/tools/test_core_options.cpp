@@ -277,6 +277,28 @@ int main()
     check_bool("Case 8 garbled normal_speed → default 1.0",
                r.emulation.normal_speed == 1.0f, true);
 
+    // -------- Case 9: System Settings round-trip --------
+    fake::reset();
+    fake::variables["pcsx2_renderer"]      = "auto";
+    fake::variables["pcsx2_mtvu"]          = "enabled";
+    fake::variables["pcsx2_fast_boot"]     = "enabled";
+    fake::variables["pcsx2_ee_cycle_rate"] = "-1";
+    fake::variables["pcsx2_ee_cycle_skip"] = "2";
+    fake::variables["pcsx2_thread_pinning"]= "enabled";
+    fake::variables["pcsx2_cheats"]        = "enabled";
+    fake::variables["pcsx2_host_fs"]       = "disabled";
+    fake::variables["pcsx2_cdvd_precache"] = "enabled";
+    fake::variables["pcsx2_fast_boot_ff"]  = "enabled";
+
+    r = ReadResolved(&fake_env_cb);
+    check_int ("Case 9 ee_cycle_rate=-1",  r.emulation.ee_cycle_rate,  -1);
+    check_int ("Case 9 ee_cycle_skip=2",   r.emulation.ee_cycle_skip,   2);
+    check_bool("Case 9 thread_pinning",    r.emulation.thread_pinning,  true);
+    check_bool("Case 9 cheats",            r.emulation.cheats,          true);
+    check_bool("Case 9 host_fs=off",       r.emulation.host_fs,         false);
+    check_bool("Case 9 cdvd_precache",     r.emulation.cdvd_precache,   true);
+    check_bool("Case 9 fast_boot_ff",      r.emulation.fast_boot_ff,    true);
+
     std::printf("\n%d failure(s)\n", failures);
     return failures == 0 ? 0 : 1;
 }
