@@ -3,7 +3,7 @@
 //
 // SP7a (Settings push): runtime resource discovery + PS2 region detection.
 //
-// Three helpers, kept together because each is small and they share no state:
+// Helpers, kept together because each is small and they share no state:
 //   - ResolveResourcesDir():       dladdr-based path next to the dylib
 //   - DetectRegionFromSerial():    GameDB → prefix-heuristic → default
 //   - DetectRegionFromSerialPrefix(): exposed for standalone unit testing
@@ -42,4 +42,4 @@ namespace Pcsx2Libretro::CoreResources
     // Maps a runtime gsVideoMode to libretro region/fps. Returns nullopt
     // for Uninitialized (the EE thread hasn't executed SetGsCrt yet).
     std::optional<DetectedRegion> RegionFromGsVideoMode(GS_VideoMode mode);
-}
+} // namespace Pcsx2Libretro::CoreResources
