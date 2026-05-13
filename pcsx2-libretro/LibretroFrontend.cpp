@@ -152,8 +152,22 @@ bool IsStateTraceEnabled()
 // (primary path, lands before RetroNest's RcheevosRuntime memory_init)
 // and retro_run first-Running frame (safety belt) cooperate cleanly.
 //
-// EE main RAM is the 32 MB region at PS2-physical 0x00000000.
-// RetroAchievements needs this descriptor to read PS2 cheevo memory
+// Two descriptors are issued:
+//   1. EE main RAM (32 MB at PS2-real 0x00000000) — covers rcheevos's
+//      Kernel RAM (0x00000000-0x000FFFFF) and System RAM
+//      (0x00100000-0x01FFFFFF) regions (per
+//      cpp/build-arm64/_deps/rcheevos-src/src/rcheevos/consoleinfo.c:813).
+//   2. EE Scratchpad RAM (16 KB at PS2-real 0x70000000) — rcheevos
+//      maps the cheevo address range 0x02000000-0x02003FFF onto this
+//      hardware address. Originally deferred in SP6 ("not needed for
+//      current RA cheevos") but R&C 2's set DOES read scratchpad —
+//      rc_client_validate_addresses computes a host pointer that
+//      lands outside our single 32 MB EE descriptor and crashes
+//      ~20 s after game launch when the achievement-list HTTP comes
+//      back. Issuing the second descriptor lets rc_libretro_memory_init
+//      match all three rcheevos PS2 regions instead of guessing.
+//
+// RetroAchievements needs these descriptors to read PS2 cheevo memory
 // addresses; if rcheevos initializes BEFORE this fires, the cheevo
 // session loads with regions=0 and achievements never trigger even
 // though the set is logged-in.
@@ -167,23 +181,36 @@ void TryIssueMemoryMaps()
     if (eeMem == nullptr) return;             // VM init may not yet have allocated EE RAM
     if (!g_frontend.environ_cb) return;       // frontend not yet wired
 
-    retro_memory_descriptor desc{};
-    desc.ptr       = eeMem->Main;
-    desc.start     = 0x00000000;          // PS2-physical
-    desc.len       = Ps2MemSize::MainRam; // 32 MB
-    desc.select    = 0;                   // RA infers from start+len
-    desc.flags     = RETRO_MEMDESC_SYSTEM_RAM;
-    desc.addrspace = "";                  // unnamed default
+    retro_memory_descriptor descs[2]{};
+
+    // EE Main RAM — 32 MB at PS2-real 0x00000000.
+    descs[0].ptr       = eeMem->Main;
+    descs[0].start     = 0x00000000;
+    descs[0].len       = Ps2MemSize::MainRam;     // 32 MB
+    descs[0].select    = 0;                       // RA infers from start+len
+    descs[0].flags     = RETRO_MEMDESC_SYSTEM_RAM;
+    descs[0].addrspace = "";
+
+    // EE Scratchpad — 16 KB at PS2-real 0x70000000. rcheevos PS2 region
+    // table marks this as RC_MEMORY_TYPE_SYSTEM_RAM so we use the same
+    // flag as the main RAM descriptor.
+    descs[1].ptr       = eeMem->Scratch;
+    descs[1].start     = 0x70000000;
+    descs[1].len       = Ps2MemSize::Scratch;     // 16 KB
+    descs[1].select    = 0;
+    descs[1].flags     = RETRO_MEMDESC_SYSTEM_RAM;
+    descs[1].addrspace = "";
 
     retro_memory_map mm{};
-    mm.descriptors     = &desc;
-    mm.num_descriptors = 1;
+    mm.descriptors     = descs;
+    mm.num_descriptors = 2;
 
     const bool ok = g_frontend.environ_cb(
         RETRO_ENVIRONMENT_SET_MEMORY_MAPS, &mm);
     FrontendLog(ok ? RETRO_LOG_INFO : RETRO_LOG_WARN,
-        "SET_MEMORY_MAPS issued: ee_ram_ptr=%p len=%u %s",
-        desc.ptr, static_cast<unsigned>(desc.len),
+        "SET_MEMORY_MAPS issued: ee_ram=%p (%u bytes), scratchpad=%p (%u bytes) %s",
+        descs[0].ptr, static_cast<unsigned>(descs[0].len),
+        descs[1].ptr, static_cast<unsigned>(descs[1].len),
         ok ? "(accepted)" : "(frontend returned false)");
     g_memory_map_issued.store(true);
 }
