@@ -404,6 +404,46 @@ int main()
     check_bool("Case 12b mt1_s3 default=off", r.memory_cards.multitap1_slot3, false);
     check_bool("Case 12b mt1_s4 default=off", r.memory_cards.multitap1_slot4, false);
 
+    // -------- Case 13: Graphics/Display round-trip --------
+    //
+    // SP7c Phase 4 Task 2 representative test for the Display sub-tab.
+    // Picks one knob from each of the 3 value-encoding flavors:
+    //   - string-valued combo (aspect_ratio: "16:9")
+    //   - int-valued combo (stretch_y: 150 — an enumerated stop)
+    //   - bool toggled away from its struct default (pcrtc_antiblur:
+    //     disabled, since the default is true — flipping to false
+    //     proves Parse runs vs. silent default bleed-through)
+    fake::reset();
+    fake::variables["pcsx2_aspect_ratio"]   = "16:9";
+    fake::variables["pcsx2_stretch_y"]      = "150";
+    fake::variables["pcsx2_pcrtc_antiblur"] = "disabled";
+
+    r = ReadResolved(&fake_env_cb);
+    {
+        const bool ar_ok = r.graphics.display.aspect_ratio == "16:9";
+        check_bool("Case 13 aspect_ratio=16:9", ar_ok, true);
+    }
+    check_int ("Case 13 stretch_y=150",       r.graphics.display.stretch_y, 150);
+    check_bool("Case 13 pcrtc_antiblur=off",  r.graphics.display.pcrtc_antiblur, false);
+
+    // -------- Case 13b: Graphics/Display default-when-unset --------
+    //
+    // Confirms struct defaults match standalone's per-row defaults when
+    // no env-var is set. Spot-checks one of each type. The pcrtc_antiblur
+    // default-true case is the critical one — it would catch a "missing
+    // = true initializer" regression in Values::Display.
+    fake::reset();
+
+    r = ReadResolved(&fake_env_cb);
+    {
+        const bool ar_default = r.graphics.display.aspect_ratio == "4:3";
+        check_bool("Case 13b aspect_ratio default=4:3", ar_default, true);
+    }
+    check_int ("Case 13b stretch_y default=100",
+                r.graphics.display.stretch_y, 100);
+    check_bool("Case 13b pcrtc_antiblur default=on",
+                r.graphics.display.pcrtc_antiblur, true);
+
     std::printf("\n%d failure(s)\n", failures);
     return failures == 0 ? 0 : 1;
 }
