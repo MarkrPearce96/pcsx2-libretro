@@ -153,7 +153,12 @@ void InitializeDefaults(const std::string& system_dir,
     // gamedb.yaml. Resolve at runtime via dladdr → <dylib_dir>/pcsx2_libretro_resources/.
     // RetroNest's install layout must place the resources directory next
     // to the dylib (see SP7a plan Task 7 for the rsync step).
-    const std::string resources_dir = CoreResources::ResolveResourcesDir();
+    const std::string resources_dir = Pcsx2Libretro::CoreResources::ResolveResourcesDir();
+    if (resources_dir.empty())
+    {
+        FrontendLog(RETRO_LOG_WARN,
+            "[SP7a] Resources path is empty — Metal/font/gamedb loads will fail downstream");
+    }
     EmuFolders::Resources = resources_dir;
     {
         Error err;
