@@ -3,6 +3,11 @@
 
 #ifndef SP7A_TEST_PREFIX_ONLY
 #include "PrecompiledHeader.h"
+
+#include "LibretroFrontend.h"          // FrontendLog
+#include "pcsx2/GameDatabase.h"        // GameDatabase::findGame
+
+#include "libretro.h"                  // RETRO_LOG_INFO / RETRO_LOG_WARN
 #endif
 
 #include "CoreResources.h"
@@ -21,9 +26,64 @@ std::string ResolveResourcesDir()
 
 DetectedRegion DetectRegionFromSerial(const std::string& serial)
 {
-    // Filled in by SP7a Task 3 (GameDB + prefix chain).
-    (void)serial;
-    return {0u /* RETRO_REGION_NTSC */, 59.94};
+    constexpr unsigned NTSC = RETRO_REGION_NTSC; // == 0
+    constexpr unsigned PAL  = RETRO_REGION_PAL;  // == 1
+    constexpr double NTSC_FPS = 59.94;
+    constexpr double PAL_FPS  = 50.0;
+
+    // Tier 1: GameDatabase lookup. Authoritative for thousands of retail
+    // games; entry->region is a free-form string ("NTSC-U", "NTSC-J",
+    // "PAL", etc.). Case-insensitive "starts with PAL" → PAL.
+    if (!serial.empty())
+    {
+        if (const auto* entry = GameDatabase::findGame(serial))
+        {
+            const std::string& region = entry->region;
+            if (region.size() >= 3
+                && (region[0] == 'P' || region[0] == 'p')
+                && (region[1] == 'A' || region[1] == 'a')
+                && (region[2] == 'L' || region[2] == 'l'))
+            {
+                FrontendLog(RETRO_LOG_INFO,
+                    "[SP7a] region=PAL fps=50.00 (GameDB '%s')",
+                    region.c_str());
+                return {PAL, PAL_FPS};
+            }
+            if (!region.empty())
+            {
+                FrontendLog(RETRO_LOG_INFO,
+                    "[SP7a] region=NTSC fps=59.94 (GameDB '%s')",
+                    region.c_str());
+                return {NTSC, NTSC_FPS};
+            }
+            // GameDB entry exists but region field is empty — fall through.
+        }
+    }
+
+    // Tier 2: prefix heuristic.
+    const DetectedRegion by_prefix = DetectRegionFromSerialPrefix(serial);
+    FrontendLog(RETRO_LOG_INFO,
+        "[SP7a] region=%s fps=%.2f (prefix heuristic on '%s')",
+        by_prefix.libretro_region == PAL ? "PAL" : "NTSC",
+        by_prefix.fps, serial.c_str());
+
+    // Tier 3 (warn for empty / clearly unknown serials). The prefix
+    // heuristic always returns SOMETHING, so this is purely diagnostic.
+    if (serial.empty()
+        || (serial.size() >= 4
+            && serial.substr(0, 4) != "SLES" && serial.substr(0, 4) != "SCES"
+            && serial.substr(0, 4) != "SCED" && serial.substr(0, 4) != "SLED"
+            && serial.substr(0, 4) != "SCUS" && serial.substr(0, 4) != "SLUS"
+            && serial.substr(0, 4) != "SCAJ" && serial.substr(0, 4) != "SLPS"
+            && serial.substr(0, 4) != "SLPM" && serial.substr(0, 4) != "SCKA"
+            && serial.substr(0, 4) != "SLKA" && serial.substr(0, 4) != "SCKR"
+            && serial.substr(0, 4) != "PSXC"))
+    {
+        FrontendLog(RETRO_LOG_WARN,
+            "[SP7a] Unknown disc serial '%s' — defaulting to NTSC", serial.c_str());
+    }
+
+    return by_prefix;
 }
 
 std::optional<DetectedRegion> RegionFromGsVideoMode(GS_VideoMode mode)
