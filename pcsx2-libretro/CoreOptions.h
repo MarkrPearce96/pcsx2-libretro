@@ -18,6 +18,7 @@
 // the -I flag in the test's compile command.
 #include "libretro.h"
 #include "CoreOptionsEmulation.h"
+#include "CoreOptionsAudio.h"
 
 #include <vector>
 
@@ -27,9 +28,9 @@ namespace Pcsx2Libretro::CoreOptions
 struct Resolved
 {
     Pcsx2Libretro::CoreOptions::Emulation::Values emulation{};
+    Pcsx2Libretro::CoreOptions::Audio::Values     audio{};
     // Future phases append:
     //   Pcsx2Libretro::CoreOptions::Graphics::Values    graphics{};
-    //   Pcsx2Libretro::CoreOptions::Audio::Values       audio{};
     //   Pcsx2Libretro::CoreOptions::MemoryCards::Values memory_cards{};
 };
 
