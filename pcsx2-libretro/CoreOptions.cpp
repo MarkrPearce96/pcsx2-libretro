@@ -134,6 +134,27 @@ Resolved ReadResolved(retro_environment_t cb)
         m.multitap1_slot3 ? "on" : "off",
         m.multitap1_slot4 ? "on" : "off");
 
+    // SP7c Phase 4: one echo line per Graphics sub-tab. Each sub-tab
+    // task extends ReadResolved's log with its own line so smoke can
+    // verify every Graphics knob reached the core. Phase 4 Task 2
+    // landed Display; later tasks add rendering/texrep/postproc/osd.
+    const auto& gd = r.graphics.display;
+    FrontendLog(RETRO_LOG_INFO,
+        "[CoreOptions] graphics.display: ar=%s fmv_ar=%s deint=%d "
+        "bilinear=%d stretchY=%d crop=%d/%d/%d/%d ws_patch=%s "
+        "no_int_patch=%s antiblur=%s int_scale=%s offsets=%s "
+        "no_int_off=%s overscan=%s",
+        gd.aspect_ratio.c_str(), gd.fmv_aspect_ratio.c_str(),
+        gd.deinterlace_mode, gd.linear_present_mode, gd.stretch_y,
+        gd.crop_left, gd.crop_top, gd.crop_right, gd.crop_bottom,
+        gd.enable_widescreen_patches    ? "on" : "off",
+        gd.enable_no_interlacing_patches ? "on" : "off",
+        gd.pcrtc_antiblur               ? "on" : "off",
+        gd.integer_scaling              ? "on" : "off",
+        gd.pcrtc_offsets                ? "on" : "off",
+        gd.disable_interlace_offset     ? "on" : "off",
+        gd.pcrtc_overscan               ? "on" : "off");
+
     return r;
 }
 

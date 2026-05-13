@@ -20,6 +20,7 @@
 
 #include "libretro.h"
 
+#include <string>
 #include <vector>
 
 namespace Pcsx2Libretro::CoreOptions { struct Resolved; }
@@ -34,7 +35,39 @@ namespace Pcsx2Libretro::CoreOptions::Graphics
 struct Values
 {
     struct Display {
-        // Phase 4 Task 2 fills these.
+        // 16 knobs mirroring standalone PCSX2 Graphics/Display sub-tab
+        // (Renderer is in Phase 0 under category=Recommended). Defaults
+        // come straight from pcsx2_adapter.cpp Graphics/Display rows so
+        // a missing options.json reproduces standalone's out-of-the-box
+        // behavior.
+
+        // Enum combos — stored values match the INI string verbatim.
+        std::string aspect_ratio          = "4:3";
+        std::string fmv_aspect_ratio      = "Off";
+        int         deinterlace_mode      = 0;
+        int         linear_present_mode   = 1;   // Bilinear (Smooth)
+
+        // Int sliders standalone-side; libretro variant exposes enumerated
+        // Combo stops (see CoreOptionsGraphics.cpp Append blocks for the
+        // stop choices). Standalone's 1%-step slider isn't expressible in
+        // libretro's core-options v2 API.
+        int  stretch_y    = 100;
+        int  crop_left    = 0;
+        int  crop_top     = 0;
+        int  crop_right   = 0;
+        int  crop_bottom  = 0;
+
+        // Patches live under [EmuCore] INI section (not [EmuCore/GS]) —
+        // ApplyDefaults handles the section split.
+        bool enable_widescreen_patches      = false;
+        bool enable_no_interlacing_patches  = false;
+
+        // GS-side display checkboxes.
+        bool pcrtc_antiblur            = true;   // standalone default true
+        bool integer_scaling           = false;
+        bool pcrtc_offsets             = false;
+        bool disable_interlace_offset  = false;
+        bool pcrtc_overscan            = false;
     } display;
 
     struct Rendering {
