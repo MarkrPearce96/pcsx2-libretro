@@ -26,8 +26,66 @@ namespace Pcsx2Libretro::CoreOptions::Emulation
 
 void AppendDefinitions(std::vector<retro_core_option_v2_definition>& out)
 {
-    // Filled in Task 3.
-    (void)out;
+    // Field order per libretro.h:6646-6763:
+    //   key, desc, desc_categorized, info, info_categorized, category_key,
+    //   values[RETRO_NUM_CORE_OPTION_VALUES_MAX], default_value.
+    //
+    // NULL for desc_categorized/info_categorized/category_key tells the
+    // frontend to display these uncategorized — RetroNest places them
+    // under SettingDef.category on the host side.
+    out.push_back({
+        "pcsx2_renderer",
+        "GS Renderer",
+        nullptr,
+        "PCSX2 graphics backend. Auto picks Metal on macOS. "
+        "Software runs on CPU only (much slower; useful for debugging "
+        "rendering bugs or for games with hardware-renderer regressions).",
+        nullptr,
+        nullptr,
+        {
+            { "auto",     "Auto" },
+            { "metal",    "Metal" },
+            { "software", "Software" },
+            { "null",     "Null" },
+            { nullptr,    nullptr },
+        },
+        "auto",
+    });
+
+    out.push_back({
+        "pcsx2_mtvu",
+        "Multi-Threaded VU1",
+        nullptr,
+        "Run the VU1 microprogram on its own thread instead of the EE thread. "
+        "Compatible with the vast majority of games; significantly reduces "
+        "EE-thread saturation on Apple Silicon's interpreter-only path. "
+        "Disable only if a specific game shows MTVU-related glitches.",
+        nullptr,
+        nullptr,
+        {
+            { "enabled",  "Enabled" },
+            { "disabled", "Disabled" },
+            { nullptr,    nullptr },
+        },
+        "enabled",
+    });
+
+    out.push_back({
+        "pcsx2_fast_boot",
+        "Fast Boot",
+        nullptr,
+        "Skip the PS2 BIOS Sony intro and region-check screen on launch. "
+        "Disable if you want to see the BIOS screen (e.g. to verify your "
+        "BIOS region or to use the BIOS browser).",
+        nullptr,
+        nullptr,
+        {
+            { "enabled",  "Enabled" },
+            { "disabled", "Disabled" },
+            { nullptr,    nullptr },
+        },
+        "enabled",
+    });
 }
 
 void Parse(retro_environment_t cb, Values& out)

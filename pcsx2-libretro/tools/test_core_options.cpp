@@ -5,12 +5,14 @@
 // Not built as part of pcsx2_libretro target — manual compile.
 //
 //   cd pcsx2-libretro/tools
-//   clang++ -std=c++20 -I.. test_core_options.cpp ../CoreOptions.cpp \
-//       -DSP7B_TEST_CORE_OPTIONS_ONLY -o test_core_options
+//   clang++ -std=c++20 -I.. test_core_options.cpp \
+//       ../CoreOptions.cpp ../CoreOptionsEmulation.cpp \
+//       -DCORE_OPTIONS_TEST_ONLY -o test_core_options
 //   ./test_core_options
 //
-// SP7B_TEST_CORE_OPTIONS_ONLY gates CoreOptions.cpp's FrontendLog
-// dependency so the test links without the rest of pcsx2-libretro.
+// CORE_OPTIONS_TEST_ONLY gates each CoreOptions*.cpp's FrontendLog and
+// MemorySettingsInterface dependencies so the test links without the
+// rest of pcsx2-libretro.
 
 #include "../CoreOptions.h"
 
@@ -23,6 +25,7 @@
 using Pcsx2Libretro::CoreOptions::ReadResolved;
 using Pcsx2Libretro::CoreOptions::EmitCoreOptionsV2;
 using Pcsx2Libretro::CoreOptions::Resolved;
+using Pcsx2Libretro::CoreOptions::BuildDefinitions;
 
 // ---------- Fake env_cb plumbing ----------
 //
@@ -100,9 +103,9 @@ int main()
     fake::variables["pcsx2_fast_boot"] = "disabled";
 
     Resolved r = ReadResolved(&fake_env_cb);
-    check_int ("Case 1 renderer",  r.renderer,  17);
-    check_bool("Case 1 mtvu",      r.mtvu,      false);
-    check_bool("Case 1 fast_boot", r.fast_boot, false);
+    check_int ("Case 1 renderer",  r.emulation.renderer,  17);
+    check_bool("Case 1 mtvu",      r.emulation.mtvu,      false);
+    check_bool("Case 1 fast_boot", r.emulation.fast_boot, false);
 
     // -------- Case 2: NULL value for one key — that field stays at default --------
     fake::reset();
@@ -112,9 +115,9 @@ int main()
     fake::variables["pcsx2_fast_boot"] = "disabled";  // → false
 
     r = ReadResolved(&fake_env_cb);
-    check_int ("Case 2 renderer",  r.renderer,  13);
-    check_bool("Case 2 mtvu",      r.mtvu,      true);   // default
-    check_bool("Case 2 fast_boot", r.fast_boot, false);
+    check_int ("Case 2 renderer",  r.emulation.renderer,  13);
+    check_bool("Case 2 mtvu",      r.emulation.mtvu,      true);   // default
+    check_bool("Case 2 fast_boot", r.emulation.fast_boot, false);
 
     // -------- Case 3: unknown renderer enum → default -1 (Auto) --------
     fake::reset();
@@ -123,9 +126,9 @@ int main()
     fake::variables["pcsx2_fast_boot"] = "enabled";
 
     r = ReadResolved(&fake_env_cb);
-    check_int ("Case 3 renderer (unknown)", r.renderer, -1);
-    check_bool("Case 3 mtvu",               r.mtvu,      true);
-    check_bool("Case 3 fast_boot",          r.fast_boot, true);
+    check_int ("Case 3 renderer (unknown)", r.emulation.renderer, -1);
+    check_bool("Case 3 mtvu",               r.emulation.mtvu,      true);
+    check_bool("Case 3 fast_boot",          r.emulation.fast_boot, true);
 
     // -------- Case 4: all defaults — every key returns its declared default string --------
     fake::reset();
@@ -134,9 +137,9 @@ int main()
     fake::variables["pcsx2_fast_boot"] = "enabled";
 
     r = ReadResolved(&fake_env_cb);
-    check_int ("Case 4 renderer",  r.renderer,  -1);
-    check_bool("Case 4 mtvu",      r.mtvu,      true);
-    check_bool("Case 4 fast_boot", r.fast_boot, true);
+    check_int ("Case 4 renderer",  r.emulation.renderer,  -1);
+    check_bool("Case 4 mtvu",      r.emulation.mtvu,      true);
+    check_bool("Case 4 fast_boot", r.emulation.fast_boot, true);
 
     // -------- Case 5: EmitCoreOptionsV2 dispatches all three keys --------
     fake::reset();
@@ -158,6 +161,28 @@ int main()
     check_bool("Case 5 key 2 = pcsx2_fast_boot",
                fake::emitted_keys.size() > 2
                && str_eq(fake::emitted_keys[2], "pcsx2_fast_boot"), true);
+
+    // -------- Case 6: BuildDefinitions returns the expected category structure --------
+    //
+    // SP7c Phase 0: assert that the master definitions table built by
+    // BuildDefinitions() contains exactly the 3 SP7b knobs in the documented
+    // order, plus the libretro terminator. Future SP7c phases extend this.
+    {
+        const auto& defs = BuildDefinitions();
+        check_int("Case 6 count = 4 (3 knobs + terminator)",
+                  static_cast<int>(defs.size()), 4);
+
+        if (defs.size() >= 4) {
+            check_bool("Case 6 [0].key = pcsx2_renderer",
+                       defs[0].key && std::strcmp(defs[0].key, "pcsx2_renderer") == 0, true);
+            check_bool("Case 6 [1].key = pcsx2_mtvu",
+                       defs[1].key && std::strcmp(defs[1].key, "pcsx2_mtvu") == 0, true);
+            check_bool("Case 6 [2].key = pcsx2_fast_boot",
+                       defs[2].key && std::strcmp(defs[2].key, "pcsx2_fast_boot") == 0, true);
+            check_bool("Case 6 [3] terminator (key == nullptr)",
+                       defs[3].key == nullptr, true);
+        }
+    }
 
     std::printf("\n%d failure(s)\n", failures);
     return failures == 0 ? 0 : 1;

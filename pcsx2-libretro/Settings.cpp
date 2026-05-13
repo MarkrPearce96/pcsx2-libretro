@@ -218,7 +218,7 @@ void InitializeDefaults(const std::string& system_dir,
     //
     // SP7b: user-tweakable via core option pcsx2_renderer.
     // Supported values per pcsx2/Config.h:271-281: Auto=-1, Null=11, SW=13, Metal=17.
-    const int renderer = options ? options->renderer : -1;
+    const int renderer = options ? options->emulation.renderer : -1;
     g_si.SetIntValue("EmuCore/GS", "Renderer", renderer);
 
     // SP4: route SPU2 → retro_audio_sample_batch_t via LibretroAudioStream.
@@ -246,7 +246,7 @@ void InitializeDefaults(const std::string& system_dir,
     // VMBootParameters.fast_boot in LibretroFrontend.cpp::retro_load_game
     // overrides this INI value at runtime, and is wired to the same
     // resolved.fast_boot. Both must match for the user's choice to apply.
-    const bool fast_boot = options ? options->fast_boot : true;
+    const bool fast_boot = options ? options->emulation.fast_boot : true;
     g_si.SetBoolValue("EmuCore", "EnableFastBoot", fast_boot);
 
     // Disable HostFS (we don't expose host filesystem to the VM).
@@ -260,7 +260,7 @@ void InitializeDefaults(const std::string& system_dir,
     //
     // SP7b: user-tweakable via core option pcsx2_mtvu. Default on for the
     // SP5 perf rationale above; only disable if a specific game has MTVU glitches.
-    const bool mtvu = options ? options->mtvu : true;
+    const bool mtvu = options ? options->emulation.mtvu : true;
     g_si.SetBoolValue("EmuCore/Speedhacks", "vuThread", mtvu);
 
     // System console routes Console.WriteLn / Console.Error to stderr.
