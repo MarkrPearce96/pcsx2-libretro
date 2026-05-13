@@ -8,6 +8,12 @@
 #include "pcsx2/GameDatabase.h"        // GameDatabase::findGame
 
 #include "libretro.h"                  // RETRO_LOG_INFO / RETRO_LOG_WARN
+
+#include "common/FileSystem.h"
+#include "common/Path.h"
+#include "pcsx2/GS.h"                  // GS_VideoMode
+
+#include <dlfcn.h>                     // dladdr / Dl_info
 #endif
 
 #include "CoreResources.h"
@@ -39,8 +45,33 @@ namespace
 #ifndef SP7A_TEST_PREFIX_ONLY
 std::string ResolveResourcesDir()
 {
-    // Filled in by SP7a Task 4.
-    return {};
+    Dl_info info{};
+    if (dladdr(reinterpret_cast<void*>(&ResolveResourcesDir), &info) == 0
+        || info.dli_fname == nullptr)
+    {
+        FrontendLog(RETRO_LOG_ERROR,
+            "[SP7a] dladdr failed when resolving resources dir; "
+            "Metal GS init will fail to find metallibs");
+        return {};
+    }
+
+    const std::string dylib_path(info.dli_fname);
+    const std::string dir(Path::GetDirectory(dylib_path));
+    const std::string resources = Path::Combine(dir, "pcsx2_libretro_resources");
+
+    if (!FileSystem::DirectoryExists(resources.c_str()))
+    {
+        FrontendLog(RETRO_LOG_ERROR,
+            "[SP7a] Resources directory not found at '%s' — install layout "
+            "missing pcsx2_libretro_resources/ next to the dylib. Metal init will fail.",
+            resources.c_str());
+    }
+    else
+    {
+        FrontendLog(RETRO_LOG_INFO,
+            "[SP7a] Resources dir = %s", resources.c_str());
+    }
+    return resources;
 }
 
 DetectedRegion DetectRegionFromSerial(const std::string& serial)
@@ -106,9 +137,32 @@ DetectedRegion DetectRegionFromSerial(const std::string& serial)
 
 std::optional<DetectedRegion> RegionFromGsVideoMode(GS_VideoMode mode)
 {
-    // Filled in by SP7a Task 4.
-    (void)mode;
-    return std::nullopt;
+    constexpr unsigned NTSC = RETRO_REGION_NTSC;
+    constexpr unsigned PAL  = RETRO_REGION_PAL;
+    constexpr double NTSC_FPS = 59.94;
+    constexpr double PAL_FPS  = 50.0;
+
+    switch (mode)
+    {
+    case GS_VideoMode::Uninitialized:
+        return std::nullopt;
+
+    case GS_VideoMode::PAL:
+    case GS_VideoMode::DVD_PAL:
+    case GS_VideoMode::SDTV_576P:
+        return DetectedRegion{PAL, PAL_FPS};
+
+    case GS_VideoMode::NTSC:
+    case GS_VideoMode::DVD_NTSC:
+    case GS_VideoMode::SDTV_480P:
+    case GS_VideoMode::HDTV_720P:
+    case GS_VideoMode::HDTV_1080I:
+    case GS_VideoMode::HDTV_1080P:
+    case GS_VideoMode::VESA:
+        return DetectedRegion{NTSC, NTSC_FPS};
+    }
+    // Unreachable — the enum is exhaustive in pcsx2/GS.h.
+    return DetectedRegion{NTSC, NTSC_FPS};
 }
 #endif
 
