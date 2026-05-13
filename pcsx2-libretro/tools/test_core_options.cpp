@@ -141,15 +141,20 @@ int main()
     check_bool("Case 4 mtvu",      r.emulation.mtvu,      true);
     check_bool("Case 4 fast_boot", r.emulation.fast_boot, true);
 
-    // -------- Case 5: EmitCoreOptionsV2 dispatches all three keys --------
+    // -------- Case 5: EmitCoreOptionsV2 dispatches the SP7b head triplet --------
+    //
+    // SP7c Phase 1+ appends more knobs, so the total count grows over time.
+    // We assert >= 3 (sentinel) and pin the first three positions to the
+    // SP7b order — same regression-sentinel pattern Case 6 adopted in
+    // Task 1. Per-entry shape is covered by Case 7.
     fake::reset();
     fake::emit_returns = true;
     const bool emit_ok = EmitCoreOptionsV2(&fake_env_cb);
     check_bool("Case 5 emit returned true", emit_ok, true);
     check_int ("Case 5 emit was seen",
                static_cast<int>(fake::emit_seen ? 1 : 0), 1);
-    check_int ("Case 5 emitted 3 keys",
-               static_cast<int>(fake::emitted_keys.size()), 3);
+    check_bool("Case 5 emitted >= 3 keys",
+               fake::emitted_keys.size() >= 3, true);
     // Order matches the kDefinitions[] table order in CoreOptions.cpp.
     auto str_eq = [](const std::string& a, const char* b) { return a == b; };
     check_bool("Case 5 key 0 = pcsx2_renderer",
@@ -238,6 +243,39 @@ int main()
             check_bool("Case 7 last entry is terminator", last.key == nullptr, true);
         }
     }
+
+    // -------- Case 8: Speed Control round-trip --------
+    //
+    // SP7c Phase 1 representative test for the Speed Control sub-group.
+    // We pick one knob per sub-group (Case 8/9/10) rather than testing all
+    // 15 individually — Case 7's structural sweep already proves every
+    // entry has well-formed values/default; this case proves the parse
+    // path's float conversion works end-to-end.
+    fake::reset();
+    fake::variables["pcsx2_renderer"]            = "auto";
+    fake::variables["pcsx2_mtvu"]                = "enabled";
+    fake::variables["pcsx2_fast_boot"]           = "enabled";
+    fake::variables["pcsx2_normal_speed"]        = "1.5";
+    fake::variables["pcsx2_fast_forward_speed"]  = "4";
+    fake::variables["pcsx2_slow_motion_speed"]   = "0.25";
+
+    r = ReadResolved(&fake_env_cb);
+    {
+        // Float comparisons: literal "1.5" → 1.5f exactly under IEEE 754.
+        const bool ns_ok  = r.emulation.normal_speed       == 1.5f;
+        const bool ffs_ok = r.emulation.fast_forward_speed == 4.0f;
+        const bool sms_ok = r.emulation.slow_motion_speed  == 0.25f;
+        check_bool("Case 8 normal_speed=1.5",        ns_ok,  true);
+        check_bool("Case 8 fast_forward_speed=4",    ffs_ok, true);
+        check_bool("Case 8 slow_motion_speed=0.25",  sms_ok, true);
+    }
+
+    // Unparseable string falls back to default 1.0
+    fake::reset();
+    fake::variables["pcsx2_normal_speed"] = "not-a-number";
+    r = ReadResolved(&fake_env_cb);
+    check_bool("Case 8 garbled normal_speed → default 1.0",
+               r.emulation.normal_speed == 1.0f, true);
 
     std::printf("\n%d failure(s)\n", failures);
     return failures == 0 ? 0 : 1;
