@@ -345,6 +345,13 @@ RETRO_API void retro_run(void)
     // serial implies. We re-check once per call until gsVideoMode returns
     // a usable answer, then either confirm or re-emit SET_SYSTEM_AV_INFO
     // and stop checking.
+    //
+    // Intentional data race: gsVideoMode is written by the EE thread
+    // (in SetGsCrt) and read here from the host thread without a lock.
+    // On x86_64 and arm64, an aligned int-sized load is atomic at the
+    // instruction level; a torn value would simply not match any enum
+    // case and RegionFromGsVideoMode returns the safe NTSC default. The
+    // worst case is one extra refinement cycle, not a corrupt result.
     if (!g_region_refined)
     {
         if (auto refined = Pcsx2Libretro::CoreResources::RegionFromGsVideoMode(gsVideoMode))
