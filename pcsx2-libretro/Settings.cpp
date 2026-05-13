@@ -134,12 +134,16 @@ void InitializeDefaults(const std::string& system_dir,
                         const std::string& save_dir,
                         const CoreOptions::Resolved* options)
 {
-    if (g_initialized)
+    // SP7c Phase 1 followup: the one-shot block below (EmuFolders, fonts,
+    // VMManager::SetDefaultSettings, libretro-required INI overrides, pad
+    // bindings, memcards) runs exactly once per process — it pokes
+    // process-singleton state and re-running would be incorrect (e.g.
+    // SetDefaultSettings would clobber the user's accumulated tweaks). But
+    // the user-resolvable Emulation::ApplyDefaults call + LoadStartupSettings
+    // re-application MUST happen on every retro_load_game so dialog changes
+    // take effect on the next launch without restarting RetroNest.
+    if (!g_initialized)
     {
-        FrontendLog(RETRO_LOG_WARN, "Settings::InitializeDefaults called twice — ignoring");
-        return;
-    }
-
     // Step 1: Initialize EmuFolders (AppRoot + DataRoot + Resources).
     // These must be set before SetDefaultSettings or LoadStartupSettings
     // because both call EmuFolders functions that need DataRoot to be valid.
@@ -240,20 +244,6 @@ void InitializeDefaults(const std::string& system_dir,
     g_si.SetBoolValue("Logging", "EnableTimestamps", false);
     g_si.SetBoolValue("Logging", "EnableVerbose", false);
 
-    // SP7c Phase 0: delegate per-category override-application to each
-    // category module. Defaults written above by VMManager::SetDefaultSettings;
-    // anything below this point either overrides those defaults with
-    // libretro-host-required values (Folders, Backend, etc.) or applies the
-    // user's core-option choices on top.
-    {
-        // SP7b/SP7c: renderer / MTVU / fast_boot live in the Emulation card.
-        // When options is null, default Values{} writes the SP7a-era hardcoded
-        // defaults — preserves pre-SP7b behavior for any caller that omits options.
-        const CoreOptions::Emulation::Values defaults{};
-        CoreOptions::Emulation::ApplyDefaults(
-            g_si, options ? options->emulation : defaults);
-    }
-
     // SP5: keep upstream sources off (SDL/XInput/DInput init hangs in the
     // libretro process — no controller subsystem); enable our LibretroInputSource
     // instead. PAD bindings written below route Libretro-N/* to Pad{N+1}/*.
@@ -296,10 +286,32 @@ void InitializeDefaults(const std::string& system_dir,
     g_si.SetBoolValue  ("MemoryCards", "Slot2_Enable",   false);
     g_si.SetStringValue("MemoryCards", "Slot2_Filename", "Mcd002.ps2");
 
-    // Apply the layered settings to the live Pcsx2Config.
-    VMManager::Internal::LoadStartupSettings();
+        g_initialized = true;
+    }  // end of one-shot init block
 
-    g_initialized = true;
+    // SP7c Phase 1 followup: user-resolvable Emulation knobs re-apply on
+    // every retro_load_game so dialog tweaks take effect on the next
+    // launch without restarting RetroNest. The pre-SP7c behavior had a
+    // hard `if (g_initialized) return;` guard which silently dropped any
+    // subsequent retro_load_game's INI overrides — caught during Phase 1
+    // smoke when Normal Speed → 50% on launch 1 stuck across reset →
+    // launch 2. SetDefaultSettings + WriteDefaultPadBindings + memcards
+    // stay one-shot above (re-running them would clobber accumulated
+    // user state); only the user-resolvable subset flows through here.
+    //
+    // SP7b/SP7c: renderer / MTVU / fast_boot live in the Emulation card.
+    // When options is null, default Values{} writes the SP7a-era hardcoded
+    // defaults — preserves pre-SP7b behavior for any caller that omits options.
+    {
+        const CoreOptions::Emulation::Values defaults{};
+        CoreOptions::Emulation::ApplyDefaults(
+            g_si, options ? options->emulation : defaults);
+    }
+
+    // Push the layered settings to the live Pcsx2Config so PCSX2's
+    // framelimiter / GS / EE / SPU2 pick up the new values on this launch.
+    // Runs every call (cheap: just propagates current g_si state).
+    VMManager::Internal::LoadStartupSettings();
 
     FrontendLog(RETRO_LOG_INFO, "Settings::InitializeDefaults complete (BIOS dir = %s)",
                 system_dir.c_str());
