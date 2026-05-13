@@ -7,7 +7,7 @@
 //   cd pcsx2-libretro/tools
 //   clang++ -std=c++20 -I.. test_core_options.cpp \
 //       ../CoreOptions.cpp ../CoreOptionsEmulation.cpp ../CoreOptionsAudio.cpp \
-//       ../CoreOptionsMemoryCards.cpp \
+//       ../CoreOptionsMemoryCards.cpp ../CoreOptionsGraphics.cpp \
 //       -DCORE_OPTIONS_TEST_ONLY -o test_core_options
 //   ./test_core_options
 //

@@ -19,6 +19,7 @@ target_sources(pcsx2_libretro PRIVATE
     CoreOptions.cpp
     CoreOptionsAudio.cpp
     CoreOptionsEmulation.cpp
+    CoreOptionsGraphics.cpp
     CoreOptionsMemoryCards.cpp
     CoreResources.cpp
 )

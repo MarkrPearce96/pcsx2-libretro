@@ -5,6 +5,7 @@
 #include "CoreOptionsEmulation.h"
 #include "CoreOptionsAudio.h"
 #include "CoreOptionsMemoryCards.h"
+#include "CoreOptionsGraphics.h"
 
 #ifdef CORE_OPTIONS_TEST_ONLY
 #include <cstdarg>
@@ -35,10 +36,11 @@ const std::vector<retro_core_option_v2_definition>& BuildDefinitions()
     // by construction. The array storage lives here.
     static const std::vector<retro_core_option_v2_definition> kAll = [] {
         std::vector<retro_core_option_v2_definition> v;
-        v.reserve(32);  // 18 Phase 1 + 5 Phase 2 + 5 Phase 3 + terminator + headroom
+        v.reserve(96);  // 18 Phase 1 + 5 Phase 2 + 5 Phase 3 + 62 Phase 4 + terminator + headroom
         Emulation::AppendDefinitions(v);
         Audio::AppendDefinitions(v);
         MemoryCards::AppendDefinitions(v);
+        Graphics::AppendDefinitions(v);
         // libretro terminator — must be the final entry per libretro.h:6787.
         v.push_back({
             nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
@@ -83,8 +85,7 @@ Resolved ReadResolved(retro_environment_t cb)
     Emulation::Parse(cb, r.emulation);
     Audio::Parse(cb, r.audio);
     MemoryCards::Parse(cb, r.memory_cards);
-
-    // Future phases append Graphics::Parse here.
+    Graphics::Parse(cb, r.graphics);
 
     // SP7c Phase 1 followup: echo all resolved Emulation values so smoke
     // testing can verify a knob's value actually reached the core (PCSX2

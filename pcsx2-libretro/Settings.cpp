@@ -8,6 +8,8 @@
 #include "CoreOptions.h"
 #include "CoreOptionsEmulation.h"
 #include "CoreOptionsAudio.h"
+#include "CoreOptionsMemoryCards.h"
+#include "CoreOptionsGraphics.h"
 #include "LibretroFrontend.h"
 
 #include "common/Error.h"
@@ -320,6 +322,10 @@ void InitializeDefaults(const std::string& system_dir,
         const CoreOptions::MemoryCards::Values mc_defaults{};
         CoreOptions::MemoryCards::ApplyDefaults(
             g_si, options ? options->memory_cards : mc_defaults);
+
+        const CoreOptions::Graphics::Values gfx_defaults{};
+        CoreOptions::Graphics::ApplyDefaults(
+            g_si, options ? options->graphics : gfx_defaults);
     }
 
     // Push the layered settings to the live Pcsx2Config so PCSX2's
