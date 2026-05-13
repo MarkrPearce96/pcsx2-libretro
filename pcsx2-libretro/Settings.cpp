@@ -5,6 +5,7 @@
 
 #include "Settings.h"
 #include "CoreResources.h"
+#include "CoreOptions.h"
 #include "LibretroFrontend.h"
 
 #include "common/Error.h"
@@ -129,7 +130,8 @@ static void WriteDefaultPadBindings(MemorySettingsInterface& si)
 }
 
 void InitializeDefaults(const std::string& system_dir,
-                        const std::string& save_dir)
+                        const std::string& save_dir,
+                        const CoreOptions::Resolved* options)
 {
     if (g_initialized)
     {
@@ -213,7 +215,11 @@ void InitializeDefaults(const std::string& system_dir,
     // real CAMetalLayer via Pattern B, so PCSX2 should actually render.
     // Auto resolves to Metal on macOS via GSUtil::GetPreferredRenderer().
     // GSRendererType::Auto == -1 in pcsx2/Config.h.
-    g_si.SetIntValue("EmuCore/GS", "Renderer", static_cast<int>(-1));
+    //
+    // SP7b: user-tweakable via core option pcsx2_renderer.
+    // Supported values per pcsx2/Config.h:271-281: Auto=-1, Null=11, SW=13, Metal=17.
+    const int renderer = options ? options->renderer : -1;
+    g_si.SetIntValue("EmuCore/GS", "Renderer", renderer);
 
     // SP4: route SPU2 → retro_audio_sample_batch_t via LibretroAudioStream.
     // The Backend value is the AudioBackend name string matching s_backend_names
@@ -235,7 +241,13 @@ void InitializeDefaults(const std::string& system_dir,
     g_si.SetBoolValue("Achievements", "Enabled", false);
 
     // Fast boot — skip BIOS region check screen.
-    g_si.SetBoolValue("EmuCore", "EnableFastBoot", true);
+    //
+    // SP7b: user-tweakable via core option pcsx2_fast_boot. Note that
+    // VMBootParameters.fast_boot in LibretroFrontend.cpp::retro_load_game
+    // overrides this INI value at runtime, and is wired to the same
+    // resolved.fast_boot. Both must match for the user's choice to apply.
+    const bool fast_boot = options ? options->fast_boot : true;
+    g_si.SetBoolValue("EmuCore", "EnableFastBoot", fast_boot);
 
     // Disable HostFS (we don't expose host filesystem to the VM).
     g_si.SetBoolValue("EmuCore", "HostFs", false);
@@ -245,7 +257,11 @@ void InitializeDefaults(const std::string& system_dir,
     // can't reach 60fps for VU-heavy games (R&C 2 measured at 65% VM speed
     // with vu thread at 0%); MTVU is compatible with the vast majority of
     // games and is the standard "did you try MTVU?" perf knob in PCSX2.
-    g_si.SetBoolValue("EmuCore/Speedhacks", "vuThread", true);
+    //
+    // SP7b: user-tweakable via core option pcsx2_mtvu. Default on for the
+    // SP5 perf rationale above; only disable if a specific game has MTVU glitches.
+    const bool mtvu = options ? options->mtvu : true;
+    g_si.SetBoolValue("EmuCore/Speedhacks", "vuThread", mtvu);
 
     // System console routes Console.WriteLn / Console.Error to stderr.
     // EnableVerbose was previously on to surface diagnostics during SP1-SP4
