@@ -14,11 +14,14 @@
 #include "Settings.h"
 #include "LibretroSaveState.h"
 
+#include "pcsx2/GS.h"
 #include "pcsx2/VMManager.h"
 #include "MemoryTypes.h"   // eeMem, Ps2MemSize::MainRam
+#include "CoreResources.h"
 
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
@@ -109,6 +112,14 @@ std::string GetSaveDirectory()
     s_resolved = true;
     return s_cached;
 }
+
+// SP7a: cached region/fps reported to libretro. Defaults to NTSC/59.94
+// until DetectRegionFromSerial runs in retro_load_game. The refined
+// flag gates the gsVideoMode-driven SET_SYSTEM_AV_INFO re-emit so we
+// never emit twice.
+unsigned g_detected_region = RETRO_REGION_NTSC;
+double   g_detected_fps    = 59.94;
+bool     g_region_refined  = false;
 
 // Atomic, used by retro_run to log VM state transitions only once.
 std::atomic<bool> g_logged_running{false};
@@ -271,7 +282,7 @@ RETRO_API void retro_get_system_av_info(struct retro_system_av_info* info)
     info->geometry.max_width    = 1280;
     info->geometry.max_height   = 1024;
     info->geometry.aspect_ratio = 4.0f / 3.0f;
-    info->timing.fps            = 60.0;       // placeholder — phase 3 will derive from GS region
+    info->timing.fps            = g_detected_fps;
     info->timing.sample_rate    = 48000.0;
 
     if (std::getenv("RETRONEST_AUDIO_TRACE"))
@@ -327,6 +338,36 @@ RETRO_API void retro_run(void)
 {
     Pcsx2Libretro::EmuThread& emu = Pcsx2Libretro::GetEmuThread();
     if (!emu.IsRunning()) return;
+
+    // SP7a: gsVideoMode-driven refinement of region/fps. The serial-based
+    // guess in retro_load_game is accurate for retail discs but homebrew
+    // and region-modded discs can run in a different mode than their
+    // serial implies. We re-check once per call until gsVideoMode returns
+    // a usable answer, then either confirm or re-emit SET_SYSTEM_AV_INFO
+    // and stop checking.
+    if (!g_region_refined)
+    {
+        if (auto refined = Pcsx2Libretro::CoreResources::RegionFromGsVideoMode(gsVideoMode))
+        {
+            const bool disagrees =
+                refined->libretro_region != g_detected_region
+                || std::abs(refined->fps - g_detected_fps) > 0.05;
+            if (disagrees)
+            {
+                g_detected_region = refined->libretro_region;
+                g_detected_fps    = refined->fps;
+                retro_system_av_info av{};
+                retro_get_system_av_info(&av);
+                if (g_frontend.environ_cb)
+                    g_frontend.environ_cb(RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO, &av);
+                FrontendLog(RETRO_LOG_INFO,
+                    "[SP7a] region refined to %s fps=%.2f from gsVideoMode",
+                    g_detected_region == RETRO_REGION_PAL ? "PAL" : "NTSC",
+                    g_detected_fps);
+            }
+            g_region_refined = true;
+        }
+    }
 
     // One-shot log when VM first reports Running with a non-zero CRC.
     if (!g_logged_running.load() && VMManager::GetState() == VMState::Running)
@@ -496,6 +537,19 @@ RETRO_API bool retro_load_game(const struct retro_game_info* game)
         return false;
     }
 
+    // SP7a: reset region cache and detect from disc serial.
+    // VMManager::GetDiscSerial() is valid as soon as Initialize completed
+    // (EmuThread::Start waits on m_init_done), so it's safe to read here.
+    // gsVideoMode is still Uninitialized at this point; the retro_run
+    // refinement pass picks it up once the EE has executed SetGsCrt.
+    g_detected_region = RETRO_REGION_NTSC;
+    g_detected_fps    = 59.94;
+    g_region_refined  = false;
+    const std::string disc_serial = VMManager::GetDiscSerial();
+    const auto detected = Pcsx2Libretro::CoreResources::DetectRegionFromSerial(disc_serial);
+    g_detected_region = detected.libretro_region;
+    g_detected_fps    = detected.fps;
+
     FrontendLog(RETRO_LOG_INFO, "retro_load_game: VM started successfully");
     g_logged_running.store(false);
 
@@ -521,6 +575,7 @@ RETRO_API void retro_unload_game(void)
 {
     g_memory_map_issued.store(false);     // re-issue on next game load
     g_logged_running.store(false);        // re-log on next Running
+    g_region_refined  = false;            // re-run gsVideoMode refinement on next game load
     Pcsx2Libretro::ResetSerializeSizeCache();  // re-probe on next game load (SP6.5)
     FrontendLog(RETRO_LOG_INFO, "retro_unload_game: requesting VM shutdown");
     Pcsx2Libretro::EmuThread& emu = Pcsx2Libretro::GetEmuThread();
@@ -529,7 +584,7 @@ RETRO_API void retro_unload_game(void)
     FrontendLog(RETRO_LOG_INFO, "retro_unload_game: emu thread joined cleanly");
 }
 
-RETRO_API unsigned retro_get_region(void) { return RETRO_REGION_NTSC; }
+RETRO_API unsigned retro_get_region(void) { return g_detected_region; }
 
 RETRO_API void* retro_get_memory_data(unsigned) { return nullptr; }
 RETRO_API size_t retro_get_memory_size(unsigned) { return 0; }
