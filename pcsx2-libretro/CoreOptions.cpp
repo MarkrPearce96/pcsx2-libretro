@@ -23,14 +23,96 @@ static void FrontendLog(int /*level*/, const char* fmt, ...)
 
 #include <cstring>
 
+namespace
+{
+
+// Option schema. Field order per libretro.h:6646-6763:
+//   key, desc, desc_categorized, info, info_categorized, category_key,
+//   values[], default_value.
+//
+// Terminator: a fully-zeroed entry (the libretro spec requires this).
+//
+// Note: NULL for desc_categorized/info_categorized/category_key tells
+// the frontend to display these options uncategorized — RetroNest places
+// them under its own "Recommended" tab via SettingDef.category in the
+// host adapter.
+const retro_core_option_v2_definition kDefinitions[] = {
+    {
+        "pcsx2_renderer",
+        "GS Renderer",
+        nullptr,                          // desc_categorized
+        "PCSX2 graphics backend. Auto picks Metal on macOS. "
+        "Software runs on CPU only (much slower; useful for debugging "
+        "rendering bugs or for games with hardware-renderer regressions).",
+        nullptr,                          // info_categorized
+        nullptr,                          // category_key
+        {
+            { "auto",     "Auto" },
+            { "metal",    "Metal" },
+            { "software", "Software" },
+            { "null",     "Null" },
+            { nullptr,    nullptr },      // terminator
+        },
+        "auto",                           // default_value
+    },
+    {
+        "pcsx2_mtvu",
+        "Multi-Threaded VU1",
+        nullptr,
+        "Run the VU1 microprogram on its own thread instead of the EE thread. "
+        "Compatible with the vast majority of games; significantly reduces "
+        "EE-thread saturation on Apple Silicon's interpreter-only path. "
+        "Disable only if a specific game shows MTVU-related glitches.",
+        nullptr,
+        nullptr,
+        {
+            { "enabled",  "Enabled" },
+            { "disabled", "Disabled" },
+            { nullptr,    nullptr },
+        },
+        "enabled",
+    },
+    {
+        "pcsx2_fast_boot",
+        "Fast Boot",
+        nullptr,
+        "Skip the PS2 BIOS Sony intro and region-check screen on launch. "
+        "Disable if you want to see the BIOS screen (e.g. to verify your "
+        "BIOS region or to use the BIOS browser).",
+        nullptr,
+        nullptr,
+        {
+            { "enabled",  "Enabled" },
+            { "disabled", "Disabled" },
+            { nullptr,    nullptr },
+        },
+        "enabled",
+    },
+    // Terminator — zeroed entry per libretro.h:6787.
+    { nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, {{nullptr,nullptr}}, nullptr },
+};
+
+const retro_core_options_v2 kCoreOptionsV2 = {
+    nullptr,                              // categories — uncategorized
+    const_cast<retro_core_option_v2_definition*>(kDefinitions),
+};
+
+} // namespace
+
 namespace Pcsx2Libretro::CoreOptions
 {
 
-bool EmitCoreOptionsV2(retro_environment_t /*cb*/)
+bool EmitCoreOptionsV2(retro_environment_t cb)
 {
-    // Task 4: real implementation lands here. Stub returns false so
-    // callers fall through to compile-time defaults during scaffolding.
-    return false;
+    if (!cb) return false;
+    const bool ok = cb(RETRO_ENVIRONMENT_SET_CORE_OPTIONS_V2,
+                       const_cast<retro_core_options_v2*>(&kCoreOptionsV2));
+    if (!ok) {
+        FrontendLog(RETRO_LOG_WARN,
+            "[CoreOptions] SET_CORE_OPTIONS_V2 not supported by host; "
+            "core will use built-in defaults");
+    }
+    return ok;
 }
 
 Resolved ReadResolved(retro_environment_t cb)
