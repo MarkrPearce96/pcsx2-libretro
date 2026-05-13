@@ -6,6 +6,7 @@
 #include "Settings.h"
 #include "CoreResources.h"
 #include "CoreOptions.h"
+#include "CoreOptionsEmulation.h"
 #include "LibretroFrontend.h"
 
 #include "common/Error.h"
@@ -210,17 +211,6 @@ void InitializeDefaults(const std::string& system_dir,
     // PCSX2 also reads patches.zip / gamedb.yaml from here.
     g_si.SetStringValue("Folders", "Resources", resources_dir.c_str());
 
-    // SP3: switched from Null (11) to Auto (-1). The Null renderer was
-    // appropriate in SP2 when we had no display surface. SP3 provides a
-    // real CAMetalLayer via Pattern B, so PCSX2 should actually render.
-    // Auto resolves to Metal on macOS via GSUtil::GetPreferredRenderer().
-    // GSRendererType::Auto == -1 in pcsx2/Config.h.
-    //
-    // SP7b: user-tweakable via core option pcsx2_renderer.
-    // Supported values per pcsx2/Config.h:271-281: Auto=-1, Null=11, SW=13, Metal=17.
-    const int renderer = options ? options->emulation.renderer : -1;
-    g_si.SetIntValue("EmuCore/GS", "Renderer", renderer);
-
     // SP4: route SPU2 → retro_audio_sample_batch_t via LibretroAudioStream.
     // The Backend value is the AudioBackend name string matching s_backend_names
     // in pcsx2/Host/AudioStream.cpp; "Libretro" is the SP4 enum addition.
@@ -240,28 +230,8 @@ void InitializeDefaults(const std::string& system_dir,
     // Disable achievements (avoid network init during boot).
     g_si.SetBoolValue("Achievements", "Enabled", false);
 
-    // Fast boot — skip BIOS region check screen.
-    //
-    // SP7b: user-tweakable via core option pcsx2_fast_boot. Note that
-    // VMBootParameters.fast_boot in LibretroFrontend.cpp::retro_load_game
-    // overrides this INI value at runtime, and is wired to the same
-    // resolved.fast_boot. Both must match for the user's choice to apply.
-    const bool fast_boot = options ? options->emulation.fast_boot : true;
-    g_si.SetBoolValue("EmuCore", "EnableFastBoot", fast_boot);
-
     // Disable HostFS (we don't expose host filesystem to the VM).
     g_si.SetBoolValue("EmuCore", "HostFs", false);
-
-    // Perf: enable Multi-Threaded VU1 so VU1 work runs on its own thread
-    // instead of saturating the EE thread. Apple Silicon's EE thread alone
-    // can't reach 60fps for VU-heavy games (R&C 2 measured at 65% VM speed
-    // with vu thread at 0%); MTVU is compatible with the vast majority of
-    // games and is the standard "did you try MTVU?" perf knob in PCSX2.
-    //
-    // SP7b: user-tweakable via core option pcsx2_mtvu. Default on for the
-    // SP5 perf rationale above; only disable if a specific game has MTVU glitches.
-    const bool mtvu = options ? options->emulation.mtvu : true;
-    g_si.SetBoolValue("EmuCore/Speedhacks", "vuThread", mtvu);
 
     // System console routes Console.WriteLn / Console.Error to stderr.
     // EnableVerbose was previously on to surface diagnostics during SP1-SP4
@@ -272,6 +242,20 @@ void InitializeDefaults(const std::string& system_dir,
     g_si.SetBoolValue("Logging", "EnableSystemConsole", true);
     g_si.SetBoolValue("Logging", "EnableTimestamps", false);
     g_si.SetBoolValue("Logging", "EnableVerbose", false);
+
+    // SP7c Phase 0: delegate per-category override-application to each
+    // category module. Defaults written above by VMManager::SetDefaultSettings;
+    // anything below this point either overrides those defaults with
+    // libretro-host-required values (Folders, Backend, etc.) or applies the
+    // user's core-option choices on top.
+    {
+        // SP7b/SP7c: renderer / MTVU / fast_boot live in the Emulation card.
+        // When options is null, default Values{} writes the SP7a-era hardcoded
+        // defaults — preserves pre-SP7b behavior for any caller that omits options.
+        const CoreOptions::Emulation::Values defaults{};
+        CoreOptions::Emulation::ApplyDefaults(
+            g_si, options ? options->emulation : defaults);
+    }
 
     // SP5: keep upstream sources off (SDL/XInput/DInput init hangs in the
     // libretro process — no controller subsystem); enable our LibretroInputSource
