@@ -145,6 +145,10 @@ std::optional<DetectedRegion> RegionFromGsVideoMode(GS_VideoMode mode)
     switch (mode)
     {
     case GS_VideoMode::Uninitialized:
+    case GS_VideoMode::Unknown:
+        // Unknown is the game-programmed-but-PCSX2-doesn't-recognise case.
+        // Treat it like Uninitialized: no usable answer; keep the
+        // serial-based guess and let retro_run check again next frame.
         return std::nullopt;
 
     case GS_VideoMode::PAL:
