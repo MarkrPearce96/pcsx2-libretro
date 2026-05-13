@@ -25,6 +25,15 @@ namespace Pcsx2Libretro::CoreResources
 
 namespace
 {
+    // Region/fps constants shared by all three detection paths. NTSC=0 / PAL=1
+    // match RETRO_REGION_NTSC / RETRO_REGION_PAL from libretro.h:450-451 — the
+    // literal values are pinned here so DetectRegionFromSerialPrefix can stay
+    // pure C++ for the standalone unit test (which doesn't pull libretro.h).
+    constexpr unsigned kNtsc    = 0;
+    constexpr unsigned kPal     = 1;
+    constexpr double   kNtscFps = 59.94;
+    constexpr double   kPalFps  = 50.0;
+
     // Single source of truth for "is this serial's 4-char prefix one
     // recognised by DetectRegionFromSerialPrefix?". Used by Tier-3 in
     // DetectRegionFromSerial to decide whether the WARN log fires.
@@ -50,11 +59,15 @@ std::string ResolveResourcesDir()
         || info.dli_fname == nullptr)
     {
         FrontendLog(RETRO_LOG_ERROR,
-            "[SP7a] dladdr failed when resolving resources dir; "
+            "[CoreResources] dladdr failed when resolving resources dir; "
             "Metal GS init will fail to find metallibs");
         return {};
     }
 
+    // Path::GetDirectory returns a std::string_view tied to dylib_path; the
+    // string ctor on the next line copies it into an owned std::string so the
+    // view's lifetime stops mattering. This is the intentional shape — not a
+    // missed move.
     const std::string dylib_path(info.dli_fname);
     const std::string dir(Path::GetDirectory(dylib_path));
     const std::string resources = Path::Combine(dir, "pcsx2_libretro_resources");
@@ -62,25 +75,20 @@ std::string ResolveResourcesDir()
     if (!FileSystem::DirectoryExists(resources.c_str()))
     {
         FrontendLog(RETRO_LOG_ERROR,
-            "[SP7a] Resources directory not found at '%s' — install layout "
+            "[CoreResources] Resources directory not found at '%s' — install layout "
             "missing pcsx2_libretro_resources/ next to the dylib. Metal init will fail.",
             resources.c_str());
     }
     else
     {
         FrontendLog(RETRO_LOG_INFO,
-            "[SP7a] Resources dir = %s", resources.c_str());
+            "[CoreResources] Resources dir = %s", resources.c_str());
     }
     return resources;
 }
 
 DetectedRegion DetectRegionFromSerial(const std::string& serial)
 {
-    constexpr unsigned NTSC = RETRO_REGION_NTSC; // == 0
-    constexpr unsigned PAL  = RETRO_REGION_PAL;  // == 1
-    constexpr double NTSC_FPS = 59.94;
-    constexpr double PAL_FPS  = 50.0;
-
     // Tier 1: GameDatabase lookup. Authoritative for thousands of retail
     // games; entry->region is a free-form string ("NTSC-U", "NTSC-J",
     // "PAL", etc.). Case-insensitive "starts with PAL" → PAL.
@@ -95,16 +103,16 @@ DetectedRegion DetectRegionFromSerial(const std::string& serial)
                 && (region[2] == 'L' || region[2] == 'l'))
             {
                 FrontendLog(RETRO_LOG_INFO,
-                    "[SP7a] region=PAL fps=50.00 (GameDB '%s')",
+                    "[Region] region=PAL fps=50.00 (GameDB '%s')",
                     region.c_str());
-                return {PAL, PAL_FPS};
+                return {kPal, kPalFps};
             }
             if (!region.empty())
             {
                 FrontendLog(RETRO_LOG_INFO,
-                    "[SP7a] region=NTSC fps=59.94 (GameDB '%s')",
+                    "[Region] region=NTSC fps=59.94 (GameDB '%s')",
                     region.c_str());
-                return {NTSC, NTSC_FPS};
+                return {kNtsc, kNtscFps};
             }
             // GameDB entry exists but region field is empty — fall through.
         }
@@ -117,8 +125,8 @@ DetectedRegion DetectRegionFromSerial(const std::string& serial)
     if (!serial.empty())
     {
         FrontendLog(RETRO_LOG_INFO,
-            "[SP7a] region=%s fps=%.2f (prefix heuristic on '%s')",
-            by_prefix.libretro_region == PAL ? "PAL" : "NTSC",
+            "[Region] region=%s fps=%.2f (prefix heuristic on '%s')",
+            by_prefix.libretro_region == kPal ? "PAL" : "NTSC",
             by_prefix.fps, serial.c_str());
     }
 
@@ -129,7 +137,7 @@ DetectedRegion DetectRegionFromSerial(const std::string& serial)
     if (!IsKnownSerialPrefix(serial))
     {
         FrontendLog(RETRO_LOG_WARN,
-            "[SP7a] Unknown disc serial '%s' — defaulting to NTSC", serial.c_str());
+            "[Region] Unknown disc serial '%s' — defaulting to NTSC", serial.c_str());
     }
 
     return by_prefix;
@@ -137,11 +145,6 @@ DetectedRegion DetectRegionFromSerial(const std::string& serial)
 
 std::optional<DetectedRegion> RegionFromGsVideoMode(GS_VideoMode mode)
 {
-    constexpr unsigned NTSC = RETRO_REGION_NTSC;
-    constexpr unsigned PAL  = RETRO_REGION_PAL;
-    constexpr double NTSC_FPS = 59.94;
-    constexpr double PAL_FPS  = 50.0;
-
     switch (mode)
     {
     case GS_VideoMode::Uninitialized:
@@ -154,7 +157,7 @@ std::optional<DetectedRegion> RegionFromGsVideoMode(GS_VideoMode mode)
     case GS_VideoMode::PAL:
     case GS_VideoMode::DVD_PAL:
     case GS_VideoMode::SDTV_576P:
-        return DetectedRegion{PAL, PAL_FPS};
+        return DetectedRegion{kPal, kPalFps};
 
     case GS_VideoMode::NTSC:
     case GS_VideoMode::DVD_NTSC:
@@ -163,10 +166,10 @@ std::optional<DetectedRegion> RegionFromGsVideoMode(GS_VideoMode mode)
     case GS_VideoMode::HDTV_1080I:
     case GS_VideoMode::HDTV_1080P:
     case GS_VideoMode::VESA:
-        return DetectedRegion{NTSC, NTSC_FPS};
+        return DetectedRegion{kNtsc, kNtscFps};
     }
     // Unreachable — the enum is exhaustive in pcsx2/GS.h.
-    return DetectedRegion{NTSC, NTSC_FPS};
+    return DetectedRegion{kNtsc, kNtscFps};
 }
 #endif
 
