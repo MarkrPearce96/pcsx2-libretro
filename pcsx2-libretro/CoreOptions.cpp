@@ -80,11 +80,35 @@ Resolved ReadResolved(retro_environment_t cb)
 
     // Future phases append Graphics::Parse, Audio::Parse, MemoryCards::Parse here.
 
+    // SP7c Phase 1 followup: echo all resolved Emulation values so smoke
+    // testing can verify a knob's value actually reached the core (PCSX2
+    // itself doesn't echo Speedhacks/Framerate/GS values to stderr).
+    // 4 lines grouped by sub-group so a grep "[CoreOptions]" gives a
+    // compact per-launch snapshot.
+    const auto& e = r.emulation;
     FrontendLog(RETRO_LOG_INFO,
         "[CoreOptions] renderer=%d mtvu=%s fast_boot=%s",
-        r.emulation.renderer,
-        r.emulation.mtvu ? "on" : "off",
-        r.emulation.fast_boot ? "on" : "off");
+        e.renderer, e.mtvu ? "on" : "off", e.fast_boot ? "on" : "off");
+    FrontendLog(RETRO_LOG_INFO,
+        "[CoreOptions] speed: normal=%.3f ff=%.3f slomo=%.3f",
+        e.normal_speed, e.fast_forward_speed, e.slow_motion_speed);
+    FrontendLog(RETRO_LOG_INFO,
+        "[CoreOptions] system: ee_rate=%d ee_skip=%d thread_pin=%s "
+        "cheats=%s host_fs=%s cdvd_precache=%s fast_boot_ff=%s",
+        e.ee_cycle_rate, e.ee_cycle_skip,
+        e.thread_pinning ? "on" : "off",
+        e.cheats ? "on" : "off",
+        e.host_fs ? "on" : "off",
+        e.cdvd_precache ? "on" : "off",
+        e.fast_boot_ff ? "on" : "off");
+    FrontendLog(RETRO_LOG_INFO,
+        "[CoreOptions] pacing: queue=%d host_rr=%s vsync=%s "
+        "vsync_timing=%s skip_dup=%s",
+        e.vsync_queue_size,
+        e.sync_to_host_rr ? "on" : "off",
+        e.vsync ? "on" : "off",
+        e.use_vsync_timing ? "on" : "off",
+        e.skip_duplicate_frames ? "on" : "off");
 
     return r;
 }
