@@ -34,7 +34,7 @@ const std::vector<retro_core_option_v2_definition>& BuildDefinitions()
     // by construction. The array storage lives here.
     static const std::vector<retro_core_option_v2_definition> kAll = [] {
         std::vector<retro_core_option_v2_definition> v;
-        v.reserve(16);  // 18 Phase 1 + 5 Phase 2 + terminator ≈ 24
+        v.reserve(24);  // 18 Phase 1 + 5 Phase 2 + terminator
         Emulation::AppendDefinitions(v);
         Audio::AppendDefinitions(v);
         // libretro terminator — must be the final entry per libretro.h:6787.
