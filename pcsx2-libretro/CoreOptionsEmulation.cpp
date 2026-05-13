@@ -196,6 +196,139 @@ void AppendDefinitions(std::vector<retro_core_option_v2_definition>& out)
         },
         "0.5",
     });
+
+    // SP7c Phase 1 — System Settings sub-group.
+    //
+    // Each entry uses a literal out.push_back({...}) form so
+    // tools/check_schema_fidelity.py's CORE_BLOCK_RE can parse it
+    // (the regex doesn't expand lambda or helper-function emissions).
+    // For the 5 bool knobs the "enabled/disabled" value list is repeated
+    // inline — minor duplication but keeps the schema-fidelity contract
+    // honest.
+    out.push_back({
+        "pcsx2_ee_cycle_rate",
+        "EE Cycle Rate",
+        nullptr,
+        "Underclocks or overclocks the emulated Emotion Engine CPU. "
+        "Negative values reduce work-per-cycle (compatibility/perf tradeoff); "
+        "positive values speed CPU-bound games at the cost of timing accuracy. "
+        "Most games should stay at 100%.",
+        nullptr,
+        nullptr,
+        {
+            { "-3", "50% (Underclock)" },
+            { "-2", "60% (Underclock)" },
+            { "-1", "75% (Underclock)" },
+            { "0",  "100% (Normal Speed)" },
+            { "1",  "130% (Overclock)" },
+            { "2",  "180% (Overclock)" },
+            { "3",  "300% (Overclock)" },
+            { nullptr, nullptr },
+        },
+        "0",
+    });
+
+    out.push_back({
+        "pcsx2_ee_cycle_skip",
+        "EE Cycle Skipping",
+        nullptr,
+        "Makes the emulated Emotion Engine skip cycles. Stronger underclock "
+        "than EE Cycle Rate; can recover frame-rate in slow scenes at the "
+        "cost of visible glitches. Leave Disabled unless a specific game "
+        "needs it.",
+        nullptr,
+        nullptr,
+        {
+            { "0", "Disabled" },
+            { "1", "Mild Underclock" },
+            { "2", "Moderate Underclock" },
+            { "3", "Maximum Underclock" },
+            { nullptr, nullptr },
+        },
+        "0",
+    });
+
+    out.push_back({
+        "pcsx2_thread_pinning",
+        "Thread Pinning",
+        nullptr,
+        "Pin emulation threads to specific CPU cores. Can reduce stutter "
+        "on systems with heterogeneous cores (e.g. Apple Silicon "
+        "performance/efficiency split). Default off.",
+        nullptr,
+        nullptr,
+        {
+            { "enabled",  "Enabled" },
+            { "disabled", "Disabled" },
+            { nullptr,    nullptr },
+        },
+        "disabled",
+    });
+
+    out.push_back({
+        "pcsx2_cheats",
+        "Enable Cheats",
+        nullptr,
+        "Load pnach cheat files from the cheats/ resource directory on game "
+        "launch. Off by default; the in-game OSD logs each loaded patch line.",
+        nullptr,
+        nullptr,
+        {
+            { "enabled",  "Enabled" },
+            { "disabled", "Disabled" },
+            { nullptr,    nullptr },
+        },
+        "disabled",
+    });
+
+    out.push_back({
+        "pcsx2_host_fs",
+        "Enable Host Filesystem",
+        nullptr,
+        "Allow the emulated PS2 to read files from the host filesystem "
+        "(homebrew-only feature; retail games never use it). Off by default.",
+        nullptr,
+        nullptr,
+        {
+            { "enabled",  "Enabled" },
+            { "disabled", "Disabled" },
+            { nullptr,    nullptr },
+        },
+        "disabled",
+    });
+
+    out.push_back({
+        "pcsx2_cdvd_precache",
+        "CDVD Precache",
+        nullptr,
+        "Load the entire disc image into RAM before booting. Eliminates "
+        "in-game disc-read stutter at the cost of extra memory usage and a "
+        "slower initial boot. Off by default.",
+        nullptr,
+        nullptr,
+        {
+            { "enabled",  "Enabled" },
+            { "disabled", "Disabled" },
+            { nullptr,    nullptr },
+        },
+        "disabled",
+    });
+
+    out.push_back({
+        "pcsx2_fast_boot_ff",
+        "Fast-Forward Through BIOS",
+        nullptr,
+        "When Fast Boot is enabled, also auto-fast-forward the brief BIOS "
+        "boot animation. Has no effect when Fast Boot is disabled.",
+        nullptr,
+        nullptr,
+        {
+            { "enabled",  "Enabled" },
+            { "disabled", "Disabled" },
+            { nullptr,    nullptr },
+        },
+        "disabled",
+    });
 }
 
 void Parse(retro_environment_t cb, Values& out)
@@ -250,6 +383,35 @@ void Parse(retro_environment_t cb, Values& out)
     parse_speed("pcsx2_normal_speed",       out.normal_speed,       1.0f);
     parse_speed("pcsx2_fast_forward_speed", out.fast_forward_speed, 2.0f);
     parse_speed("pcsx2_slow_motion_speed",  out.slow_motion_speed,  0.5f);
+
+    // SP7c Phase 1 — System Settings parsing.
+    auto parse_int = [&query](const char* key, int& out_field, int fallback) {
+        if (const char* v = query(key)) {
+            char* end = nullptr;
+            const long parsed = std::strtol(v, &end, 10);
+            if (end == v) {
+                FrontendLog(RETRO_LOG_WARN,
+                    "[CoreOptions] Unparseable %s='%s'; keeping default %d",
+                    key, v, fallback);
+                out_field = fallback;
+            } else {
+                out_field = static_cast<int>(parsed);
+            }
+        }
+    };
+
+    auto parse_bool = [&query](const char* key, bool& out_field) {
+        if (const char* v = query(key))
+            out_field = (std::strcmp(v, "enabled") == 0);
+    };
+
+    parse_int("pcsx2_ee_cycle_rate", out.ee_cycle_rate, 0);
+    parse_int("pcsx2_ee_cycle_skip", out.ee_cycle_skip, 0);
+    parse_bool("pcsx2_thread_pinning", out.thread_pinning);
+    parse_bool("pcsx2_cheats",         out.cheats);
+    parse_bool("pcsx2_host_fs",        out.host_fs);
+    parse_bool("pcsx2_cdvd_precache",  out.cdvd_precache);
+    parse_bool("pcsx2_fast_boot_ff",   out.fast_boot_ff);
 }
 
 #ifndef CORE_OPTIONS_TEST_ONLY
@@ -282,6 +444,15 @@ void ApplyDefaults(MemorySettingsInterface& si, const Values& v)
     si.SetFloatValue("Framerate", "NominalScalar", v.normal_speed);
     si.SetFloatValue("Framerate", "TurboScalar",   v.fast_forward_speed);
     si.SetFloatValue("Framerate", "SlomoScalar",   v.slow_motion_speed);
+
+    // SP7c Phase 1 — System Settings.
+    si.SetIntValue ("EmuCore/Speedhacks", "EECycleRate", v.ee_cycle_rate);
+    si.SetIntValue ("EmuCore/Speedhacks", "EECycleSkip", v.ee_cycle_skip);
+    si.SetBoolValue("EmuCore", "EnableThreadPinning",       v.thread_pinning);
+    si.SetBoolValue("EmuCore", "EnableCheats",              v.cheats);
+    si.SetBoolValue("EmuCore", "HostFs",                    v.host_fs);
+    si.SetBoolValue("EmuCore", "CdvdPrecache",              v.cdvd_precache);
+    si.SetBoolValue("EmuCore", "EnableFastBootFastForward", v.fast_boot_ff);
 }
 #endif
 

@@ -36,6 +36,16 @@ struct Values
     float normal_speed       = 1.0f;  // Framerate/NominalScalar
     float fast_forward_speed = 2.0f;  // Framerate/TurboScalar
     float slow_motion_speed  = 0.5f;  // Framerate/SlomoScalar
+
+    // --- SP7c Phase 1: System Settings (7 new knobs) ---
+    // vuThread (MTVU) and fast_boot already declared above; not duplicated.
+    int  ee_cycle_rate  = 0;     // EmuCore/Speedhacks/EECycleRate (-3..+3)
+    int  ee_cycle_skip  = 0;     // EmuCore/Speedhacks/EECycleSkip (0..3)
+    bool thread_pinning = false; // EmuCore/EnableThreadPinning
+    bool cheats         = false; // EmuCore/EnableCheats
+    bool host_fs        = false; // EmuCore/HostFs
+    bool cdvd_precache  = false; // EmuCore/CdvdPrecache
+    bool fast_boot_ff   = false; // EmuCore/EnableFastBootFastForward
 };
 
 // Append this category's option definitions to the master vector.
