@@ -90,9 +90,33 @@ void AppendDefinitions(std::vector<retro_core_option_v2_definition>& out)
 
 void Parse(retro_environment_t cb, Values& out)
 {
-    // Filled in Task 4.
-    (void)cb;
-    (void)out;
+    if (!cb) return;
+
+    auto query = [&cb](const char* key) -> const char* {
+        retro_variable var{};
+        var.key = key;
+        if (cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+            return var.value;
+        return nullptr;
+    };
+
+    if (const char* v = query("pcsx2_renderer")) {
+        if      (std::strcmp(v, "auto")     == 0) out.renderer = -1;
+        else if (std::strcmp(v, "metal")    == 0) out.renderer = 17;
+        else if (std::strcmp(v, "software") == 0) out.renderer = 13;
+        else if (std::strcmp(v, "null")     == 0) out.renderer = 11;
+        else {
+            FrontendLog(RETRO_LOG_WARN,
+                "[CoreOptions] Unknown renderer '%s'; defaulting to auto", v);
+            out.renderer = -1;
+        }
+    }
+
+    if (const char* v = query("pcsx2_mtvu"))
+        out.mtvu = (std::strcmp(v, "enabled") == 0);
+
+    if (const char* v = query("pcsx2_fast_boot"))
+        out.fast_boot = (std::strcmp(v, "enabled") == 0);
 }
 
 #ifndef CORE_OPTIONS_TEST_ONLY
