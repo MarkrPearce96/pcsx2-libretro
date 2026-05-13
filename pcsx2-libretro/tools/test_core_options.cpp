@@ -326,6 +326,43 @@ int main()
     check_int("Case 10b garbled ee_cycle_rate → default 0",  r.emulation.ee_cycle_rate,      0);
     check_int("Case 10b garbled vsync_queue_size → default 2", r.emulation.vsync_queue_size, 2);
 
+    // -------- Case 11: Audio round-trip --------
+    //
+    // SP7c Phase 2 representative test for the Audio card. Sets all 5
+    // Audio knobs to non-defaults, parses, asserts each field reflects
+    // the env-var value. Mirrors Case 9 / Case 10's pattern.
+    fake::reset();
+    fake::variables["pcsx2_audio_sync_mode"] = "Disabled";
+    fake::variables["pcsx2_audio_buffer_ms"] = "30";
+    fake::variables["pcsx2_audio_volume"]    = "75";
+    fake::variables["pcsx2_audio_ff_volume"] = "0";
+    fake::variables["pcsx2_audio_muted"]     = "enabled";
+
+    r = ReadResolved(&fake_env_cb);
+    {
+        const bool sm_ok = r.audio.sync_mode == "Disabled";
+        check_bool("Case 11 sync_mode=Disabled", sm_ok, true);
+    }
+    check_int ("Case 11 buffer_ms=30",   r.audio.buffer_ms, 30);
+    check_int ("Case 11 volume=75",      r.audio.volume,    75);
+    check_int ("Case 11 ff_volume=0",    r.audio.ff_volume, 0);
+    check_bool("Case 11 muted=on",       r.audio.muted,     true);
+
+    // Unknown sync_mode string falls back to default "TimeStretch" + WARN.
+    // Captures a regression scenario: a stale options.json from an
+    // older core build with a value that PCSX2's ParseSyncMode would
+    // reject. Without the explicit validation in Audio::Parse, the
+    // string would flow into g_si unchanged and PCSX2's SettingsWrap
+    // would silently reject it at SPU2 load time (hard to debug from
+    // an empty log).
+    fake::reset();
+    fake::variables["pcsx2_audio_sync_mode"] = "ASync";
+    r = ReadResolved(&fake_env_cb);
+    {
+        const bool sm_default = r.audio.sync_mode == "TimeStretch";
+        check_bool("Case 11 unknown sync_mode → TimeStretch", sm_default, true);
+    }
+
     std::printf("\n%d failure(s)\n", failures);
     return failures == 0 ? 0 : 1;
 }
