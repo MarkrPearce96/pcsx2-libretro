@@ -126,9 +126,21 @@ void Parse(retro_environment_t cb, Values& out)
 // is exercised at the live-smoke level via Settings::InitializeDefaults.
 void ApplyDefaults(MemorySettingsInterface& si, const Values& v)
 {
-    // Filled in Task 5.
-    (void)si;
-    (void)v;
+    // SP3: Renderer was Null (11) at first to bring up without a display
+    // surface; SP3 added Pattern B with a real CAMetalLayer so Auto (-1)
+    // works. Supported per pcsx2/Config.h:271-281:
+    //   Auto = -1, Null = 11, SW = 13, Metal = 17.
+    si.SetIntValue("EmuCore/GS", "Renderer", v.renderer);
+
+    // Fast boot — also wired in LibretroFrontend.cpp via
+    // VMBootParameters.fast_boot, which overrides this INI at boot time.
+    // Both layers MUST get the same value.
+    si.SetBoolValue("EmuCore", "EnableFastBoot", v.fast_boot);
+
+    // Multi-Threaded VU1 — default on (SP5 perf rationale: Apple Silicon
+    // interpreters saturate the EE thread otherwise). Disable only for
+    // games with documented MTVU glitches.
+    si.SetBoolValue("EmuCore/Speedhacks", "vuThread", v.mtvu);
 }
 #endif
 
