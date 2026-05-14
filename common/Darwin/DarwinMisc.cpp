@@ -509,6 +509,36 @@ void PageFaultHandler::SignalHandler(mach_port_t port)
 
 bool PageFaultHandler::Install(Error* error)
 {
+	// Idempotency: re-install on the current thread but reuse the
+	// existing SignalHandler thread + mach port from the first call.
+	//
+	// Without this guard, every Install() call (e.g., subsequent
+	// VMManager::Initialize cycles in a libretro-style host that re-uses
+	// one process for many game launches) spawns a fresh detached
+	// SignalHandler thread AND leaks the previous mach_port via the
+	// `s_port = port;` overwrite below. A 6-cycle smoke session captured
+	// 6 orphaned Mach Exception Threads in the process. Standalone PCSX2
+	// only ever calls Install() once per process, so this never surfaced
+	// upstream.
+	//
+	// The fix: on subsequent calls, only re-register the calling thread's
+	// exception port to the existing s_port — same as InstallSecondaryThread
+	// does for non-EmuThread threads. The SignalHandler thread + port
+	// stay alive for the lifetime of the process, mirroring standalone
+	// PCSX2's effective behavior.
+	if (s_installed)
+	{
+		kern_return_t r2 = thread_set_exception_ports(mach_thread_self(),
+			EXC_MASK_BAD_ACCESS, s_port,
+			EXCEPTION_STATE | MACH_EXCEPTION_CODES, THREAD_STATE64);
+		if (r2)
+		{
+			pxFailRel(fmt::format("thread_set_exception_ports (re-install on cycle N>1): {:x}", r2).c_str());
+			return false;
+		}
+		return true;
+	}
+
 	exception_mask_t masks[EXC_TYPES_COUNT];
 	mach_port_t ports[EXC_TYPES_COUNT];
 	exception_behavior_t behaviors[EXC_TYPES_COUNT];
