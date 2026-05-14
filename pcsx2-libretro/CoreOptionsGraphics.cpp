@@ -831,6 +831,431 @@ void AppendDefinitions(std::vector<retro_core_option_v2_definition>& out)
         },
         "50",
     });
+
+    // ── On-Screen Display sub-tab (Phase 4 Task 6) ──
+    //
+    // 23 knobs. 22 stored under [EmuCore/GS]; warn_about_unsafe_settings
+    // under [EmuCore] (split-section like Task 2 patches rows). Defaults
+    // verified against pcsx2/Config.h:730-733,768-786 + Pcsx2Config.cpp:
+    // 720-745,1943.
+    //
+    // OsdScale + OsdMargin are int sliders standalone-side; libretro v2
+    // is Combo-only, so they use enumerated stops (Task 2 Crop + Task 5
+    // CAS Sharpness precedent). 8 stops each, default sits on a stop.
+    //
+    // OsdMessagesPos + OsdPerformancePos use the 10-stop OsdOverlayPos
+    // enum (None=0, TopLeft=1, TopCenter=2, TopRight=3, CenterLeft=4,
+    // Center=5, CenterRight=6, BottomLeft=7, BottomCenter=8,
+    // BottomRight=9). Per Config.h:341-353.
+
+    // -- "On-Screen Display" group (5 rows) --
+
+    out.push_back({
+        "pcsx2_osd_scale",
+        "OSD Scale",
+        nullptr,
+        "Global multiplier applied to every OSD overlay. 100% matches "
+        "standalone PCSX2's default size. Standalone exposes a "
+        "25-500% slider; libretro offers enumerated stops.",
+        nullptr,
+        nullptr,
+        {
+            { "50",  "50%" },
+            { "75",  "75%" },
+            { "100", "100% (Default)" },
+            { "125", "125%" },
+            { "150", "150%" },
+            { "200", "200%" },
+            { "300", "300%" },
+            { "500", "500%" },
+            { nullptr, nullptr },
+        },
+        "100",
+    });
+
+    out.push_back({
+        "pcsx2_osd_margin",
+        "OSD Margin",
+        nullptr,
+        "Pixel offset between the OSD elements and the screen edge. "
+        "Standalone exposes a 0-100px slider; libretro offers "
+        "enumerated stops.",
+        nullptr,
+        nullptr,
+        {
+            { "0",   "0px" },
+            { "5",   "5px" },
+            { "10",  "10px (Default)" },
+            { "15",  "15px" },
+            { "20",  "20px" },
+            { "30",  "30px" },
+            { "50",  "50px" },
+            { "100", "100px" },
+            { nullptr, nullptr },
+        },
+        "10",
+    });
+
+    out.push_back({
+        "pcsx2_osd_messages_pos",
+        "OSD Messages Position",
+        nullptr,
+        "Corner where transient messages (save-state loaded, shader "
+        "reload, etc.) are drawn. Set to None to hide them entirely.",
+        nullptr,
+        nullptr,
+        {
+            { "0", "None" },
+            { "1", "Top Left (Default)" },
+            { "2", "Top Center" },
+            { "3", "Top Right" },
+            { "4", "Center Left" },
+            { "5", "Center" },
+            { "6", "Center Right" },
+            { "7", "Bottom Left" },
+            { "8", "Bottom Center" },
+            { "9", "Bottom Right" },
+            { nullptr, nullptr },
+        },
+        "1",
+    });
+
+    out.push_back({
+        "pcsx2_osd_performance_pos",
+        "OSD Performance Position",
+        nullptr,
+        "Corner where the performance stats column (FPS/Speed/CPU/GPU/"
+        "etc.) is drawn. Set to None to hide the column and grey out "
+        "every Performance Stats / System Information toggle.",
+        nullptr,
+        nullptr,
+        {
+            { "0", "None" },
+            { "1", "Top Left" },
+            { "2", "Top Center" },
+            { "3", "Top Right (Default)" },
+            { "4", "Center Left" },
+            { "5", "Center" },
+            { "6", "Center Right" },
+            { "7", "Bottom Left" },
+            { "8", "Bottom Center" },
+            { "9", "Bottom Right" },
+            { nullptr, nullptr },
+        },
+        "3",
+    });
+
+    out.push_back({
+        "pcsx2_osd_bold_text",
+        "OSD Text Style (Bold)",
+        nullptr,
+        "Renders OSD text in bold. Easier to read on bright scenes.",
+        nullptr,
+        nullptr,
+        {
+            { "enabled",  "Enabled" },
+            { "disabled", "Disabled (Default)" },
+            { nullptr,    nullptr },
+        },
+        "disabled",
+    });
+
+    // -- "Performance Stats" group (9 rows; host-side dependsOn pcsx2_osd_performance_pos!=0) --
+
+    out.push_back({
+        "pcsx2_osd_show_speed",
+        "Show Speed Percentages",
+        nullptr,
+        "Displays the emulation speed as a percentage. Red below 95%, "
+        "green above 105%.",
+        nullptr,
+        nullptr,
+        {
+            { "enabled",  "Enabled" },
+            { "disabled", "Disabled (Default)" },
+            { nullptr,    nullptr },
+        },
+        "disabled",
+    });
+
+    out.push_back({
+        "pcsx2_osd_show_fps",
+        "Show FPS",
+        nullptr,
+        "Displays the current frame rate reported by the GS. Useful "
+        "for spotting performance issues.",
+        nullptr,
+        nullptr,
+        {
+            { "enabled",  "Enabled" },
+            { "disabled", "Disabled (Default)" },
+            { nullptr,    nullptr },
+        },
+        "disabled",
+    });
+
+    out.push_back({
+        "pcsx2_osd_show_vps",
+        "Show VPS",
+        nullptr,
+        "Displays vertical syncs per second — the PS2 display refresh "
+        "reported by the GS.",
+        nullptr,
+        nullptr,
+        {
+            { "enabled",  "Enabled" },
+            { "disabled", "Disabled (Default)" },
+            { nullptr,    nullptr },
+        },
+        "disabled",
+    });
+
+    out.push_back({
+        "pcsx2_osd_show_resolution",
+        "Show Resolution",
+        nullptr,
+        "Displays the PS2 internal render resolution and interlacing "
+        "mode.",
+        nullptr,
+        nullptr,
+        {
+            { "enabled",  "Enabled" },
+            { "disabled", "Disabled (Default)" },
+            { nullptr,    nullptr },
+        },
+        "disabled",
+    });
+
+    out.push_back({
+        "pcsx2_osd_show_gs_stats",
+        "Show GS Statistics",
+        nullptr,
+        "Displays per-frame GS statistics: draw-call count, VRAM use, "
+        "and a frame-time summary.",
+        nullptr,
+        nullptr,
+        {
+            { "enabled",  "Enabled" },
+            { "disabled", "Disabled (Default)" },
+            { nullptr,    nullptr },
+        },
+        "disabled",
+    });
+
+    out.push_back({
+        "pcsx2_osd_show_cpu",
+        "Show CPU Usage",
+        nullptr,
+        "Displays per-component CPU usage (EE, GS, VU).",
+        nullptr,
+        nullptr,
+        {
+            { "enabled",  "Enabled" },
+            { "disabled", "Disabled (Default)" },
+            { nullptr,    nullptr },
+        },
+        "disabled",
+    });
+
+    out.push_back({
+        "pcsx2_osd_show_gpu",
+        "Show GPU Usage",
+        nullptr,
+        "Displays GPU usage percentage and frame time in milliseconds.",
+        nullptr,
+        nullptr,
+        {
+            { "enabled",  "Enabled" },
+            { "disabled", "Disabled (Default)" },
+            { nullptr,    nullptr },
+        },
+        "disabled",
+    });
+
+    out.push_back({
+        "pcsx2_osd_show_indicators",
+        "Show Status Indicators",
+        nullptr,
+        "Displays icons for pause, fast-forward, slow-motion, and "
+        "turbo modes in the top-right corner.",
+        nullptr,
+        nullptr,
+        {
+            { "enabled",  "Enabled (Default)" },
+            { "disabled", "Disabled" },
+            { nullptr,    nullptr },
+        },
+        "enabled",
+    });
+
+    out.push_back({
+        "pcsx2_osd_show_frame_times",
+        "Show Frame Times",
+        nullptr,
+        "Displays a rolling graph of recent frame times to visualise "
+        "stutter.",
+        nullptr,
+        nullptr,
+        {
+            { "enabled",  "Enabled" },
+            { "disabled", "Disabled (Default)" },
+            { nullptr,    nullptr },
+        },
+        "disabled",
+    });
+
+    // -- "System Information" group (2 rows; host-side dependsOn pcsx2_osd_performance_pos!=0) --
+
+    out.push_back({
+        "pcsx2_osd_show_hardware_info",
+        "Show Hardware Info",
+        nullptr,
+        "Displays the CPU and GPU model names as two lines in the "
+        "performance column.",
+        nullptr,
+        nullptr,
+        {
+            { "enabled",  "Enabled" },
+            { "disabled", "Disabled (Default)" },
+            { nullptr,    nullptr },
+        },
+        "disabled",
+    });
+
+    out.push_back({
+        "pcsx2_osd_show_version",
+        "Show PCSX2 Version",
+        nullptr,
+        "Displays the PCSX2 version string in the performance column.",
+        nullptr,
+        nullptr,
+        {
+            { "enabled",  "Enabled" },
+            { "disabled", "Disabled (Default)" },
+            { nullptr,    nullptr },
+        },
+        "disabled",
+    });
+
+    // -- "Settings & Inputs" group (6 rows; mixed dependsOn host-side) --
+
+    out.push_back({
+        "pcsx2_osd_show_settings",
+        "Show Settings",
+        nullptr,
+        "Displays a compact summary of active emulation settings in "
+        "the bottom-right corner.",
+        nullptr,
+        nullptr,
+        {
+            { "enabled",  "Enabled" },
+            { "disabled", "Disabled (Default)" },
+            { nullptr,    nullptr },
+        },
+        "disabled",
+    });
+
+    out.push_back({
+        "pcsx2_osd_show_patches",
+        "Show Patches",
+        nullptr,
+        "Appends active patches (widescreen, no-interlacing, etc.) to "
+        "the settings line. Requires Show Settings to be enabled.",
+        nullptr,
+        nullptr,
+        {
+            { "enabled",  "Enabled" },
+            { "disabled", "Disabled (Default)" },
+            { nullptr,    nullptr },
+        },
+        "disabled",
+    });
+
+    out.push_back({
+        "pcsx2_osd_show_inputs",
+        "Show Inputs",
+        nullptr,
+        "Displays the current controller input state at the "
+        "bottom-left corner.",
+        nullptr,
+        nullptr,
+        {
+            { "enabled",  "Enabled" },
+            { "disabled", "Disabled (Default)" },
+            { nullptr,    nullptr },
+        },
+        "disabled",
+    });
+
+    out.push_back({
+        "pcsx2_osd_show_video_capture",
+        "Show Video Capture Status",
+        nullptr,
+        "Displays a recording indicator while video capture is "
+        "active. (Inert in the libretro variant — no FFmpeg capture "
+        "is driven from this build.)",
+        nullptr,
+        nullptr,
+        {
+            { "enabled",  "Enabled (Default)" },
+            { "disabled", "Disabled" },
+            { nullptr,    nullptr },
+        },
+        "enabled",
+    });
+
+    out.push_back({
+        "pcsx2_osd_show_input_rec",
+        "Show Input Recording Status",
+        nullptr,
+        "Displays an indicator while input recording is active. "
+        "(Inert in the libretro variant — input recording UI is not "
+        "driven from this build.)",
+        nullptr,
+        nullptr,
+        {
+            { "enabled",  "Enabled (Default)" },
+            { "disabled", "Disabled" },
+            { nullptr,    nullptr },
+        },
+        "enabled",
+    });
+
+    out.push_back({
+        "pcsx2_osd_show_texture_replacements",
+        "Show Texture Replacement Status",
+        nullptr,
+        "Displays an indicator when replacement textures are loaded "
+        "for the current game. Requires Texture Replacement → Load "
+        "Textures to be enabled.",
+        nullptr,
+        nullptr,
+        {
+            { "enabled",  "Enabled" },
+            { "disabled", "Disabled (Default)" },
+            { nullptr,    nullptr },
+        },
+        "disabled",
+    });
+
+    // -- "Messages" group (1 row; host-side dependsOn pcsx2_osd_messages_pos!=0) --
+    // NOTE: stored under [EmuCore] (not [EmuCore/GS]). Same split as
+    // Task 2's widescreen/no-interlacing patches rows.
+
+    out.push_back({
+        "pcsx2_warn_about_unsafe_settings",
+        "Warn About Unsafe Settings",
+        nullptr,
+        "Shows a startup warning if any unsafe settings are enabled.",
+        nullptr,
+        nullptr,
+        {
+            { "enabled",  "Enabled (Default)" },
+            { "disabled", "Disabled" },
+            { nullptr,    nullptr },
+        },
+        "enabled",
+    });
 }
 
 void Parse(retro_environment_t cb, Values& out)
@@ -942,6 +1367,58 @@ void Parse(retro_environment_t cb, Values& out)
         out.post_processing.shade_boost_saturation = parse_int(v, 50);
     if (const char* v = query("pcsx2_shade_boost_gamma"))
         out.post_processing.shade_boost_gamma = parse_int(v, 50);
+
+    // ── On-Screen Display sub-tab ──
+    if (const char* v = query("pcsx2_osd_scale"))
+        out.osd.osd_scale = parse_int(v, 100);
+    if (const char* v = query("pcsx2_osd_margin"))
+        out.osd.osd_margin = parse_int(v, 10);
+    if (const char* v = query("pcsx2_osd_messages_pos"))
+        out.osd.osd_messages_pos = parse_int(v, 1);
+    if (const char* v = query("pcsx2_osd_performance_pos"))
+        out.osd.osd_performance_pos = parse_int(v, 3);
+    if (const char* v = query("pcsx2_osd_bold_text"))
+        out.osd.osd_bold_text = parse_bool(v);
+
+    if (const char* v = query("pcsx2_osd_show_speed"))
+        out.osd.osd_show_speed = parse_bool(v);
+    if (const char* v = query("pcsx2_osd_show_fps"))
+        out.osd.osd_show_fps = parse_bool(v);
+    if (const char* v = query("pcsx2_osd_show_vps"))
+        out.osd.osd_show_vps = parse_bool(v);
+    if (const char* v = query("pcsx2_osd_show_resolution"))
+        out.osd.osd_show_resolution = parse_bool(v);
+    if (const char* v = query("pcsx2_osd_show_gs_stats"))
+        out.osd.osd_show_gs_stats = parse_bool(v);
+    if (const char* v = query("pcsx2_osd_show_cpu"))
+        out.osd.osd_show_cpu = parse_bool(v);
+    if (const char* v = query("pcsx2_osd_show_gpu"))
+        out.osd.osd_show_gpu = parse_bool(v);
+    if (const char* v = query("pcsx2_osd_show_indicators"))
+        out.osd.osd_show_indicators = parse_bool(v);
+    if (const char* v = query("pcsx2_osd_show_frame_times"))
+        out.osd.osd_show_frame_times = parse_bool(v);
+
+    if (const char* v = query("pcsx2_osd_show_hardware_info"))
+        out.osd.osd_show_hardware_info = parse_bool(v);
+    if (const char* v = query("pcsx2_osd_show_version"))
+        out.osd.osd_show_version = parse_bool(v);
+
+    if (const char* v = query("pcsx2_osd_show_settings"))
+        out.osd.osd_show_settings = parse_bool(v);
+    if (const char* v = query("pcsx2_osd_show_patches"))
+        out.osd.osd_show_patches = parse_bool(v);
+    if (const char* v = query("pcsx2_osd_show_inputs"))
+        out.osd.osd_show_inputs = parse_bool(v);
+    if (const char* v = query("pcsx2_osd_show_video_capture"))
+        out.osd.osd_show_video_capture = parse_bool(v);
+    if (const char* v = query("pcsx2_osd_show_input_rec"))
+        out.osd.osd_show_input_rec = parse_bool(v);
+    if (const char* v = query("pcsx2_osd_show_texture_replacements"))
+        out.osd.osd_show_texture_replacements = parse_bool(v);
+
+    if (const char* v = query("pcsx2_warn_about_unsafe_settings"))
+        out.osd.warn_about_unsafe_settings = parse_bool(v);
 }
 
 #ifndef CORE_OPTIONS_TEST_ONLY
@@ -1002,6 +1479,42 @@ void ApplyDefaults(MemorySettingsInterface& si, const Values& v)
     si.SetIntValue ("EmuCore/GS", "ShadeBoost_Contrast",   v.post_processing.shade_boost_contrast);
     si.SetIntValue ("EmuCore/GS", "ShadeBoost_Saturation", v.post_processing.shade_boost_saturation);
     si.SetIntValue ("EmuCore/GS", "ShadeBoost_Gamma",      v.post_processing.shade_boost_gamma);
+
+    // ── On-Screen Display sub-tab ──
+    // 22 fields under [EmuCore/GS]; warn_about_unsafe_settings under
+    // [EmuCore] (split-section, see spec). OsdshowPatches INI key
+    // preserves PCSX2's lowercase-'s' typo verbatim (Config.h:781) —
+    // mis-spelling here would silently no-op (PCSX2 ignores the
+    // correctly-cased key on read).
+    si.SetIntValue ("EmuCore/GS", "OsdScale",                   v.osd.osd_scale);
+    si.SetIntValue ("EmuCore/GS", "OsdMargin",                  v.osd.osd_margin);
+    si.SetIntValue ("EmuCore/GS", "OsdMessagesPos",             v.osd.osd_messages_pos);
+    si.SetIntValue ("EmuCore/GS", "OsdPerformancePos",          v.osd.osd_performance_pos);
+    si.SetBoolValue("EmuCore/GS", "OsdBoldText",                v.osd.osd_bold_text);
+
+    si.SetBoolValue("EmuCore/GS", "OsdShowSpeed",               v.osd.osd_show_speed);
+    si.SetBoolValue("EmuCore/GS", "OsdShowFPS",                 v.osd.osd_show_fps);
+    si.SetBoolValue("EmuCore/GS", "OsdShowVPS",                 v.osd.osd_show_vps);
+    si.SetBoolValue("EmuCore/GS", "OsdShowResolution",          v.osd.osd_show_resolution);
+    si.SetBoolValue("EmuCore/GS", "OsdShowGSStats",             v.osd.osd_show_gs_stats);
+    si.SetBoolValue("EmuCore/GS", "OsdShowCPU",                 v.osd.osd_show_cpu);
+    si.SetBoolValue("EmuCore/GS", "OsdShowGPU",                 v.osd.osd_show_gpu);
+    si.SetBoolValue("EmuCore/GS", "OsdShowIndicators",          v.osd.osd_show_indicators);
+    si.SetBoolValue("EmuCore/GS", "OsdShowFrameTimes",          v.osd.osd_show_frame_times);
+
+    si.SetBoolValue("EmuCore/GS", "OsdShowHardwareInfo",        v.osd.osd_show_hardware_info);
+    si.SetBoolValue("EmuCore/GS", "OsdShowVersion",             v.osd.osd_show_version);
+
+    si.SetBoolValue("EmuCore/GS", "OsdShowSettings",            v.osd.osd_show_settings);
+    si.SetBoolValue("EmuCore/GS", "OsdshowPatches",             v.osd.osd_show_patches); // lowercase-s, see Config.h:781
+    si.SetBoolValue("EmuCore/GS", "OsdShowInputs",              v.osd.osd_show_inputs);
+    si.SetBoolValue("EmuCore/GS", "OsdShowVideoCapture",        v.osd.osd_show_video_capture);
+    si.SetBoolValue("EmuCore/GS", "OsdShowInputRec",            v.osd.osd_show_input_rec);
+    si.SetBoolValue("EmuCore/GS", "OsdShowTextureReplacements", v.osd.osd_show_texture_replacements);
+
+    // Split section: WarnAboutUnsafeSettings lives in [EmuCore], not
+    // [EmuCore/GS]. Matches Pcsx2Config.cpp:1943 placement.
+    si.SetBoolValue("EmuCore",    "WarnAboutUnsafeSettings",    v.osd.warn_about_unsafe_settings);
 }
 #endif
 
