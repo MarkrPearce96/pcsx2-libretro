@@ -637,6 +637,200 @@ void AppendDefinitions(std::vector<retro_core_option_v2_definition>& out)
         },
         "disabled",
     });
+
+    // ── Post-Processing sub-tab (9 knobs) — Phase 4 Task 5 ─────────────
+    //
+    // Two groups: Sharpening/Anti-Aliasing (CAS Mode + CAS Sharpness +
+    // FXAA) and Filters (TV Shader + ShadeBoost master + 4 ShadeBoost
+    // sliders). All stored under [EmuCore/GS].
+    //
+    // 5 standalone-side int sliders (CAS Sharpness + 4 ShadeBoost rows)
+    // become Combo with stops 0/25/50/75/100 because libretro core
+    // options v2 is Combo-only. The shared 5-stop value list is inlined
+    // at each call site (matches Task 2's Crop{Left,Top,Right,Bottom}
+    // pattern — keeps grep-ability, low duplication cost). Default 50
+    // for all 5 hits a stop and is the neutral midpoint of PCSX2's
+    // shader formula value/50.
+    //
+    // dependsOn for Sharpness + ShadeBoost slaves is expressed on the
+    // host side (Combo dependsOn strings). Within-Graphics gates resolve
+    // correctly via GenericSettingsPage::refreshDependencies (cross-
+    // category limitation does not apply — see SP7c memory
+    // cross_category_dependson_limitation).
+
+    out.push_back({
+        "pcsx2_cas_mode",
+        "Contrast Adaptive Sharpening (CAS)",
+        nullptr,
+        "AMD's Contrast Adaptive Sharpening pass on the final image. "
+        "Sharpen Only sharpens at the internal render resolution; "
+        "Sharpen and Resize sharpens at the display resolution.",
+        nullptr,
+        nullptr,
+        {
+            { "0", "Disabled (Default)" },
+            { "1", "Sharpen Only (Internal Resolution)" },
+            { "2", "Sharpen and Resize (Display Resolution)" },
+            { nullptr, nullptr },
+        },
+        "0",
+    });
+
+    out.push_back({
+        "pcsx2_cas_sharpness",
+        "CAS Sharpness",
+        nullptr,
+        "Strength of the CAS sharpening pass. Higher values produce a "
+        "sharper image with more visible noise. Standalone PCSX2 exposes "
+        "a 1–100% slider; libretro offers enumerated stops.",
+        nullptr,
+        nullptr,
+        {
+            { "0",   "0%" },
+            { "25",  "25%" },
+            { "50",  "50% (Default)" },
+            { "75",  "75%" },
+            { "100", "100%" },
+            { nullptr, nullptr },
+        },
+        "50",
+    });
+
+    out.push_back({
+        "pcsx2_fxaa",
+        "FXAA",
+        nullptr,
+        "Fast Approximate Anti-Aliasing. A single-pass shader that "
+        "softens jagged edges with low GPU cost.",
+        nullptr,
+        nullptr,
+        {
+            { "enabled",  "Enabled" },
+            { "disabled", "Disabled" },
+            { nullptr,    nullptr },
+        },
+        "disabled",
+    });
+
+    out.push_back({
+        "pcsx2_tv_shader",
+        "TV Shader",
+        nullptr,
+        "Applies a CRT-style filter to the final output for an authentic "
+        "retro look. None disables the filter.",
+        nullptr,
+        nullptr,
+        {
+            { "0", "None (Default)" },
+            { "1", "Scanline Filter" },
+            { "2", "Diagonal Filter" },
+            { "3", "Triangular Filter" },
+            { "4", "Wave Filter" },
+            { "5", "Lottes CRT" },
+            { "6", "4xRGSS Downsampling" },
+            { "7", "NxAGSS Downsampling" },
+            { nullptr, nullptr },
+        },
+        "0",
+    });
+
+    out.push_back({
+        "pcsx2_shade_boost",
+        "Shade Boost",
+        nullptr,
+        "Master toggle for manual brightness, contrast, saturation, and "
+        "gamma adjustment via the Shade Boost shader.",
+        nullptr,
+        nullptr,
+        {
+            { "enabled",  "Enabled" },
+            { "disabled", "Disabled" },
+            { nullptr,    nullptr },
+        },
+        "disabled",
+    });
+
+    out.push_back({
+        "pcsx2_shade_boost_brightness",
+        "Shade Boost — Brightness",
+        nullptr,
+        "Brightness multiplier when Shade Boost is enabled. 50% is "
+        "neutral (no change); 0% blacks out the image; 100% is double "
+        "brightness. Standalone PCSX2 exposes a 1–100% slider; libretro "
+        "offers enumerated stops.",
+        nullptr,
+        nullptr,
+        {
+            { "0",   "0%" },
+            { "25",  "25%" },
+            { "50",  "50% (Default — Neutral)" },
+            { "75",  "75%" },
+            { "100", "100%" },
+            { nullptr, nullptr },
+        },
+        "50",
+    });
+
+    out.push_back({
+        "pcsx2_shade_boost_contrast",
+        "Shade Boost — Contrast",
+        nullptr,
+        "Contrast multiplier when Shade Boost is enabled. 50% is neutral "
+        "(no change). Standalone PCSX2 exposes a 1–100% slider; libretro "
+        "offers enumerated stops.",
+        nullptr,
+        nullptr,
+        {
+            { "0",   "0%" },
+            { "25",  "25%" },
+            { "50",  "50% (Default — Neutral)" },
+            { "75",  "75%" },
+            { "100", "100%" },
+            { nullptr, nullptr },
+        },
+        "50",
+    });
+
+    out.push_back({
+        "pcsx2_shade_boost_saturation",
+        "Shade Boost — Saturation",
+        nullptr,
+        "Color-saturation multiplier when Shade Boost is enabled. 50% is "
+        "neutral (no change); 0% produces grayscale. Standalone PCSX2 "
+        "exposes a 1–100% slider; libretro offers enumerated stops.",
+        nullptr,
+        nullptr,
+        {
+            { "0",   "0%" },
+            { "25",  "25%" },
+            { "50",  "50% (Default — Neutral)" },
+            { "75",  "75%" },
+            { "100", "100%" },
+            { nullptr, nullptr },
+        },
+        "50",
+    });
+
+    out.push_back({
+        "pcsx2_shade_boost_gamma",
+        "Shade Boost — Gamma",
+        nullptr,
+        "Gamma-correction multiplier when Shade Boost is enabled. 50% is "
+        "neutral (no change); lower values darken midtones, higher "
+        "values brighten midtones. Standalone PCSX2 exposes a 1–100% "
+        "slider; libretro offers enumerated stops.",
+        nullptr,
+        nullptr,
+        {
+            { "0",   "0%" },
+            { "25",  "25%" },
+            { "50",  "50% (Default — Neutral)" },
+            { "75",  "75%" },
+            { "100", "100%" },
+            { nullptr, nullptr },
+        },
+        "50",
+    });
 }
 
 void Parse(retro_environment_t cb, Values& out)
@@ -728,6 +922,26 @@ void Parse(retro_environment_t cb, Values& out)
         out.texture_replacement.dump_replaceable_mipmaps = parse_bool(v);
     if (const char* v = query("pcsx2_dump_textures_with_fmv_active"))
         out.texture_replacement.dump_textures_with_fmv_active = parse_bool(v);
+
+    // ── Post-Processing sub-tab ──
+    if (const char* v = query("pcsx2_cas_mode"))
+        out.post_processing.cas_mode = parse_int(v, 0);
+    if (const char* v = query("pcsx2_cas_sharpness"))
+        out.post_processing.cas_sharpness = parse_int(v, 50);
+    if (const char* v = query("pcsx2_fxaa"))
+        out.post_processing.fxaa = parse_bool(v);
+    if (const char* v = query("pcsx2_tv_shader"))
+        out.post_processing.tv_shader = parse_int(v, 0);
+    if (const char* v = query("pcsx2_shade_boost"))
+        out.post_processing.shade_boost = parse_bool(v);
+    if (const char* v = query("pcsx2_shade_boost_brightness"))
+        out.post_processing.shade_boost_brightness = parse_int(v, 50);
+    if (const char* v = query("pcsx2_shade_boost_contrast"))
+        out.post_processing.shade_boost_contrast = parse_int(v, 50);
+    if (const char* v = query("pcsx2_shade_boost_saturation"))
+        out.post_processing.shade_boost_saturation = parse_int(v, 50);
+    if (const char* v = query("pcsx2_shade_boost_gamma"))
+        out.post_processing.shade_boost_gamma = parse_int(v, 50);
 }
 
 #ifndef CORE_OPTIONS_TEST_ONLY
@@ -777,6 +991,17 @@ void ApplyDefaults(MemorySettingsInterface& si, const Values& v)
     si.SetBoolValue("EmuCore/GS", "PrecacheTextureReplacements",  v.texture_replacement.precache_texture_replacements);
     si.SetBoolValue("EmuCore/GS", "DumpReplaceableMipmaps",       v.texture_replacement.dump_replaceable_mipmaps);
     si.SetBoolValue("EmuCore/GS", "DumpTexturesWithFMVActive",    v.texture_replacement.dump_textures_with_fmv_active);
+
+    // ── Post-Processing sub-tab ──
+    si.SetIntValue ("EmuCore/GS", "CASMode",               v.post_processing.cas_mode);
+    si.SetIntValue ("EmuCore/GS", "CASSharpness",          v.post_processing.cas_sharpness);
+    si.SetBoolValue("EmuCore/GS", "fxaa",                  v.post_processing.fxaa);
+    si.SetIntValue ("EmuCore/GS", "TVShader",              v.post_processing.tv_shader);
+    si.SetBoolValue("EmuCore/GS", "ShadeBoost",            v.post_processing.shade_boost);
+    si.SetIntValue ("EmuCore/GS", "ShadeBoost_Brightness", v.post_processing.shade_boost_brightness);
+    si.SetIntValue ("EmuCore/GS", "ShadeBoost_Contrast",   v.post_processing.shade_boost_contrast);
+    si.SetIntValue ("EmuCore/GS", "ShadeBoost_Saturation", v.post_processing.shade_boost_saturation);
+    si.SetIntValue ("EmuCore/GS", "ShadeBoost_Gamma",      v.post_processing.shade_boost_gamma);
 }
 #endif
 
