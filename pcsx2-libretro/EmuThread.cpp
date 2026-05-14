@@ -8,6 +8,9 @@
 
 #include "common/Error.h"
 #include "pcsx2/Host.h"
+#include "pcsx2/MTGS.h"         // MTGS::WaitGS — cross-cycle thread-sync workaround
+#include "pcsx2/MTVU.h"         // vu1Thread.WaitVU — cross-cycle thread-sync workaround
+#include "pcsx2/Config.h"       // THREAD_VU1
 #include "pcsx2/VMManager.h"
 
 #include "libretro.h"
@@ -219,6 +222,27 @@ void EmuThread::ThreadFunc(VMBootParameters params)
     }
 
     FrontendLog(RETRO_LOG_INFO, "VMManager::Initialize succeeded; entering Execute");
+
+    // Cross-cycle race workaround. Without this, ~1-in-5 cold-resume cycles
+    // freezes after ~4-7 retro_load_game cycles in one process — the EE thread
+    // resumes execution before some other thread (suspected MTGS, but not yet
+    // proven) has finished settling post-thaw, and the EE picks up garbage
+    // state (R5900 Exception: Jump to unaligned/unmapped PC ~0, or silent
+    // interpreter spin). Empirically validated via 30+ resume cycles in a
+    // diagnostic build that hashed 32 MB of EE RAM here (~100 ms of CPU work).
+    // The WaitGS/WaitVU calls are the right semantic sync (drain pending GS +
+    // MTVU work) but are 0 ms when threads are idle — not enough on their own.
+    // The sleep_for is the empirically-tuned delay that the diagnostic build
+    // proved sufficient. Not a root-cause fix — see
+    // memory/ee_recompiler_freeze_pickup.md for the narrowed investigation
+    // surface (likely MTGS-internal globals persisting across per-cycle
+    // ShutdownThread/StartThread). Total cost: ~150 ms on resume, invisible
+    // against the ~500 ms VM init.
+    MTGS::WaitGS();
+    if (THREAD_VU1)
+        vu1Thread.WaitVU();
+    std::this_thread::sleep_for(std::chrono::milliseconds(150));
+
     m_init_success.store(true);
     m_init_done.store(true);
     m_init_cv.notify_all();
