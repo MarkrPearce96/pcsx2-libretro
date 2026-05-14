@@ -520,6 +520,80 @@ int main()
     check_bool("Case 15b dump_textures_with_fmv_active default=off",
                 r.graphics.texture_replacement.dump_textures_with_fmv_active, false);
 
+    // -------- Case 16: Graphics/Post-Processing round-trip --------
+    //
+    // SP7c Phase 4 Task 5 representative test for the Post-Processing
+    // sub-tab. Picks one knob per value-encoding flavor + one per group:
+    //   - 3-stop Combo, non-default (cas_mode = 1)
+    //   - 5-stop Combo, non-default, depends on cas_mode flip
+    //     (cas_sharpness = 75)
+    //   - bool toggled to true (fxaa = enabled)
+    //   - 8-stop Combo (tv_shader = 3)
+    //   - bool master toggled to true (shade_boost = enabled)
+    //   - 5-stop Combo (shade_boost_brightness = 25)
+    //   - 5-stop Combo at edge stop (shade_boost_gamma = 0)
+    // Leaves shade_boost_contrast and shade_boost_saturation unset so
+    // ReadResolved skips their Parse branches — the assertions below
+    // confirm those fields hold their struct-default value of 50, which
+    // catches a missing initializer in Values::PostProcessing.
+    fake::reset();
+    fake::variables["pcsx2_cas_mode"]               = "1";
+    fake::variables["pcsx2_cas_sharpness"]          = "75";
+    fake::variables["pcsx2_fxaa"]                   = "enabled";
+    fake::variables["pcsx2_tv_shader"]              = "3";
+    fake::variables["pcsx2_shade_boost"]            = "enabled";
+    fake::variables["pcsx2_shade_boost_brightness"] = "25";
+    fake::variables["pcsx2_shade_boost_gamma"]      = "0";
+
+    r = ReadResolved(&fake_env_cb);
+    check_int ("Case 16 cas_mode=1",
+                r.graphics.post_processing.cas_mode, 1);
+    check_int ("Case 16 cas_sharpness=75",
+                r.graphics.post_processing.cas_sharpness, 75);
+    check_bool("Case 16 fxaa=on",
+                r.graphics.post_processing.fxaa, true);
+    check_int ("Case 16 tv_shader=3",
+                r.graphics.post_processing.tv_shader, 3);
+    check_bool("Case 16 shade_boost=on",
+                r.graphics.post_processing.shade_boost, true);
+    check_int ("Case 16 shade_boost_brightness=25",
+                r.graphics.post_processing.shade_boost_brightness, 25);
+    check_int ("Case 16 shade_boost_contrast struct-default=50",
+                r.graphics.post_processing.shade_boost_contrast, 50);
+    check_int ("Case 16 shade_boost_saturation struct-default=50",
+                r.graphics.post_processing.shade_boost_saturation, 50);
+    check_int ("Case 16 shade_boost_gamma=0 (edge)",
+                r.graphics.post_processing.shade_boost_gamma, 0);
+
+    // -------- Case 16b: Graphics/Post-Processing default-when-unset --------
+    //
+    // Confirms the full default vector when no env-var is set. There is
+    // no single "non-default-default" anchor in this sub-tab (all 5
+    // sliders default to 50, all 2 bools to false, all 2 combos to 0)
+    // — so we assert all 9 fields explicitly to catch drift in any
+    // individual initializer.
+    fake::reset();
+
+    r = ReadResolved(&fake_env_cb);
+    check_int ("Case 16b cas_mode default=0",
+                r.graphics.post_processing.cas_mode, 0);
+    check_int ("Case 16b cas_sharpness default=50",
+                r.graphics.post_processing.cas_sharpness, 50);
+    check_bool("Case 16b fxaa default=off",
+                r.graphics.post_processing.fxaa, false);
+    check_int ("Case 16b tv_shader default=0",
+                r.graphics.post_processing.tv_shader, 0);
+    check_bool("Case 16b shade_boost default=off",
+                r.graphics.post_processing.shade_boost, false);
+    check_int ("Case 16b shade_boost_brightness default=50",
+                r.graphics.post_processing.shade_boost_brightness, 50);
+    check_int ("Case 16b shade_boost_contrast default=50",
+                r.graphics.post_processing.shade_boost_contrast, 50);
+    check_int ("Case 16b shade_boost_saturation default=50",
+                r.graphics.post_processing.shade_boost_saturation, 50);
+    check_int ("Case 16b shade_boost_gamma default=50",
+                r.graphics.post_processing.shade_boost_gamma, 50);
+
     std::printf("\n%d failure(s)\n", failures);
     return failures == 0 ? 0 : 1;
 }

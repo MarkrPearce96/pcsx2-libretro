@@ -100,7 +100,21 @@ struct Values
     } texture_replacement;
 
     struct PostProcessing {
-        // Phase 4 Task 5 fills these.
+        // 9 knobs mirroring standalone PCSX2 Graphics/Post-Processing
+        // sub-tab. All stored as INI under [EmuCore/GS]. Defaults match
+        // pcsx2/Config.h:723,741-744,870,894 verbatim — all 5 slider
+        // knobs default to 50 (neutral midpoint of the shader formula
+        // value/50). Two groups: Sharpening/Anti-Aliasing (CAS×2 + FXAA)
+        // and Filters (TVShader, ShadeBoost master + 4 sliders).
+        int  cas_mode               = 0;     // GSCASMode::Disabled
+        int  cas_sharpness          = 50;
+        bool fxaa                   = false;
+        int  tv_shader              = 0;
+        bool shade_boost            = false;
+        int  shade_boost_brightness = 50;
+        int  shade_boost_contrast   = 50;
+        int  shade_boost_saturation = 50;
+        int  shade_boost_gamma      = 50;
     } post_processing;
 
     struct Osd {

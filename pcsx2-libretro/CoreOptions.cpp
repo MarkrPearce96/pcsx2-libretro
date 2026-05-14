@@ -174,6 +174,17 @@ Resolved ReadResolved(retro_environment_t cb)
         gt.dump_replaceable_mipmaps        ? "on" : "off",
         gt.dump_textures_with_fmv_active   ? "on" : "off");
 
+    const auto& gp = r.graphics.post_processing;
+    FrontendLog(RETRO_LOG_INFO,
+        "[CoreOptions] graphics.postproc: cas=%d cas_sharp=%d fxaa=%s "
+        "tv=%d shade=%s sb_br=%d sb_co=%d sb_sa=%d sb_ga=%d",
+        gp.cas_mode, gp.cas_sharpness,
+        gp.fxaa ? "on" : "off",
+        gp.tv_shader,
+        gp.shade_boost ? "on" : "off",
+        gp.shade_boost_brightness, gp.shade_boost_contrast,
+        gp.shade_boost_saturation, gp.shade_boost_gamma);
+
     return r;
 }
 
