@@ -13,6 +13,9 @@
 
 #include "pcsx2/VMManager.h"
 #include "pcsx2/SaveState.h"    // SaveState_DownloadState, ArchiveEntryList, SaveState_UnzipFromMemory
+#include "pcsx2/MTGS.h"         // MTGS::WaitGS — cross-cycle thread-sync workaround
+#include "pcsx2/MTVU.h"         // vu1Thread.WaitVU — cross-cycle thread-sync workaround
+#include "pcsx2/Config.h"       // THREAD_VU1
 #include "common/Error.h"
 
 #include <zip.h>                // libzip
@@ -442,6 +445,17 @@ bool Serialize(void* dst, size_t len)
     const auto t0 = std::chrono::steady_clock::now();
     const VMState prev = WaitForVmPaused();
     if (prev == VMState::Shutdown) return false;
+
+    // Cross-cycle race workaround (matches EmuThread.cpp post-init).
+    // Ensure pending GS / MTVU work is drained AND give the host enough time
+    // to fully settle before snapshotting — the savestate's gsFreeze /
+    // vuJITFreeze pull from the same globals these threads write to, and
+    // capturing too eagerly produces a bad savestate that later thaws into a
+    // freeze. See EmuThread.cpp + memory/ee_recompiler_freeze_pickup.md.
+    MTGS::WaitGS();
+    if (THREAD_VU1)
+        vu1Thread.WaitVU();
+    std::this_thread::sleep_for(std::chrono::milliseconds(150));
 
     bool ok = false;
     {
