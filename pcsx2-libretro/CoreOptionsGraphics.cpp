@@ -524,6 +524,119 @@ void AppendDefinitions(std::vector<retro_core_option_v2_definition>& out)
         },
         "enabled",
     });
+
+    // ── Texture Replacement sub-tab (6 knobs) — Phase 4 Task 4 ─────────
+    //
+    // All bools under [EmuCore/GS]. Standalone gates every row on
+    // Renderer!=13 (Software). The libretro variant translates that to
+    // pcsx2_renderer!=software on the host side (dependsOn string),
+    // since pcsx2_renderer is a string-valued Combo, not the int enum.
+    // The search-directory picker is dropped (RetroNest manages
+    // EmuFolders::Textures from SP1). Per-game scoping is native:
+    // GSTextureReplacements::Path::Combine(EmuFolders::Textures,
+    // s_current_serial) — no extra wiring needed.
+    out.push_back({
+        "pcsx2_load_texture_replacements",
+        "Load Textures",
+        nullptr,
+        "Loads replacement textures from the texture-replacement folder "
+        "(per-game subdirectory keyed by disc serial). Only effective "
+        "with a hardware renderer.",
+        nullptr,
+        nullptr,
+        {
+            { "enabled",  "Enabled" },
+            { "disabled", "Disabled" },
+            { nullptr,    nullptr },
+        },
+        "disabled",
+    });
+
+    out.push_back({
+        "pcsx2_dump_replaceable_textures",
+        "Dump Textures",
+        nullptr,
+        "Dumps the game's textures to disk so they can be edited and "
+        "loaded back as replacements. Writes to the per-game texture-"
+        "replacement subdirectory. Only effective with a hardware "
+        "renderer.",
+        nullptr,
+        nullptr,
+        {
+            { "enabled",  "Enabled" },
+            { "disabled", "Disabled" },
+            { nullptr,    nullptr },
+        },
+        "disabled",
+    });
+
+    out.push_back({
+        "pcsx2_load_texture_replacements_async",
+        "Asynchronous Texture Loading",
+        nullptr,
+        "Loads replacement textures on a background thread to avoid "
+        "stutter at first sight of each texture. Disable only for "
+        "deterministic capture or debugging.",
+        nullptr,
+        nullptr,
+        {
+            { "enabled",  "Enabled" },
+            { "disabled", "Disabled" },
+            { nullptr,    nullptr },
+        },
+        "enabled",
+    });
+
+    out.push_back({
+        "pcsx2_precache_texture_replacements",
+        "Precache Replacements",
+        nullptr,
+        "Loads every replacement texture for the current game at boot "
+        "instead of on-demand. Uses more memory but eliminates load "
+        "stutter mid-game.",
+        nullptr,
+        nullptr,
+        {
+            { "enabled",  "Enabled" },
+            { "disabled", "Disabled" },
+            { nullptr,    nullptr },
+        },
+        "disabled",
+    });
+
+    out.push_back({
+        "pcsx2_dump_replaceable_mipmaps",
+        "Dump Mipmaps",
+        nullptr,
+        "When dumping textures, also writes each mipmap level. Useful "
+        "for replacing distance LODs explicitly. Only meaningful with "
+        "Dump Textures enabled.",
+        nullptr,
+        nullptr,
+        {
+            { "enabled",  "Enabled" },
+            { "disabled", "Disabled" },
+            { nullptr,    nullptr },
+        },
+        "disabled",
+    });
+
+    out.push_back({
+        "pcsx2_dump_textures_with_fmv_active",
+        "Dump Textures During FMV",
+        nullptr,
+        "Includes textures used during full-motion video in dumps. Off "
+        "by default because FMV frames produce a large volume of one-"
+        "off textures.",
+        nullptr,
+        nullptr,
+        {
+            { "enabled",  "Enabled" },
+            { "disabled", "Disabled" },
+            { nullptr,    nullptr },
+        },
+        "disabled",
+    });
 }
 
 void Parse(retro_environment_t cb, Values& out)
@@ -601,6 +714,20 @@ void Parse(retro_environment_t cb, Values& out)
         out.rendering.accurate_blending_unit = parse_int(v, 1);
     if (const char* v = query("pcsx2_hw_mipmap"))
         out.rendering.hw_mipmap = parse_bool(v);
+
+    // ── Texture Replacement sub-tab ──
+    if (const char* v = query("pcsx2_load_texture_replacements"))
+        out.texture_replacement.load_texture_replacements = parse_bool(v);
+    if (const char* v = query("pcsx2_dump_replaceable_textures"))
+        out.texture_replacement.dump_replaceable_textures = parse_bool(v);
+    if (const char* v = query("pcsx2_load_texture_replacements_async"))
+        out.texture_replacement.load_texture_replacements_async = parse_bool(v);
+    if (const char* v = query("pcsx2_precache_texture_replacements"))
+        out.texture_replacement.precache_texture_replacements = parse_bool(v);
+    if (const char* v = query("pcsx2_dump_replaceable_mipmaps"))
+        out.texture_replacement.dump_replaceable_mipmaps = parse_bool(v);
+    if (const char* v = query("pcsx2_dump_textures_with_fmv_active"))
+        out.texture_replacement.dump_textures_with_fmv_active = parse_bool(v);
 }
 
 #ifndef CORE_OPTIONS_TEST_ONLY
@@ -642,6 +769,14 @@ void ApplyDefaults(MemorySettingsInterface& si, const Values& v)
     si.SetIntValue ("EmuCore/GS", "dithering_ps2",          v.rendering.dithering_ps2);
     si.SetIntValue ("EmuCore/GS", "accurate_blending_unit", v.rendering.accurate_blending_unit);
     si.SetBoolValue("EmuCore/GS", "hw_mipmap",              v.rendering.hw_mipmap);
+
+    // ── Texture Replacement sub-tab ──
+    si.SetBoolValue("EmuCore/GS", "LoadTextureReplacements",      v.texture_replacement.load_texture_replacements);
+    si.SetBoolValue("EmuCore/GS", "DumpReplaceableTextures",      v.texture_replacement.dump_replaceable_textures);
+    si.SetBoolValue("EmuCore/GS", "LoadTextureReplacementsAsync", v.texture_replacement.load_texture_replacements_async);
+    si.SetBoolValue("EmuCore/GS", "PrecacheTextureReplacements",  v.texture_replacement.precache_texture_replacements);
+    si.SetBoolValue("EmuCore/GS", "DumpReplaceableMipmaps",       v.texture_replacement.dump_replaceable_mipmaps);
+    si.SetBoolValue("EmuCore/GS", "DumpTexturesWithFMVActive",    v.texture_replacement.dump_textures_with_fmv_active);
 }
 #endif
 

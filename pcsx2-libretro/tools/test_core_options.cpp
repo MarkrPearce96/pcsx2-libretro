@@ -481,6 +481,45 @@ int main()
     check_bool("Case 14b hw_mipmap default=on",
                 r.graphics.rendering.hw_mipmap, true);
 
+    // -------- Case 15: Graphics/Texture Replacement round-trip --------
+    //
+    // SP7c Phase 4 Task 4 representative test for the Texture Replacement
+    // sub-tab. All 6 knobs are bool, so we cover:
+    //   - bool toggled to true on a default-false row (load=enabled
+    //     proves Parse runs vs. silent default-false bleed-through)
+    //   - bool toggled to false on the only default-true row
+    //     (load_texture_replacements_async — would catch a missing
+    //     "= true" initializer in Values::TextureReplacement)
+    fake::reset();
+    fake::variables["pcsx2_load_texture_replacements"]       = "enabled";
+    fake::variables["pcsx2_load_texture_replacements_async"] = "disabled";
+
+    r = ReadResolved(&fake_env_cb);
+    check_bool("Case 15 load_texture_replacements=on",
+                r.graphics.texture_replacement.load_texture_replacements, true);
+    check_bool("Case 15 load_texture_replacements_async=off",
+                r.graphics.texture_replacement.load_texture_replacements_async, false);
+
+    // -------- Case 15b: Graphics/Texture Replacement default-when-unset
+    //
+    // Confirms struct defaults match standalone. The async default-true
+    // case is the critical one — same shape as Case 14b's hw_mipmap.
+    fake::reset();
+
+    r = ReadResolved(&fake_env_cb);
+    check_bool("Case 15b load_texture_replacements default=off",
+                r.graphics.texture_replacement.load_texture_replacements, false);
+    check_bool("Case 15b load_texture_replacements_async default=on",
+                r.graphics.texture_replacement.load_texture_replacements_async, true);
+    check_bool("Case 15b dump_replaceable_textures default=off",
+                r.graphics.texture_replacement.dump_replaceable_textures, false);
+    check_bool("Case 15b precache_texture_replacements default=off",
+                r.graphics.texture_replacement.precache_texture_replacements, false);
+    check_bool("Case 15b dump_replaceable_mipmaps default=off",
+                r.graphics.texture_replacement.dump_replaceable_mipmaps, false);
+    check_bool("Case 15b dump_textures_with_fmv_active default=off",
+                r.graphics.texture_replacement.dump_textures_with_fmv_active, false);
+
     std::printf("\n%d failure(s)\n", failures);
     return failures == 0 ? 0 : 1;
 }
