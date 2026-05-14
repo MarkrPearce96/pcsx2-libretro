@@ -185,6 +185,42 @@ Resolved ReadResolved(retro_environment_t cb)
         gp.shade_boost_brightness, gp.shade_boost_contrast,
         gp.shade_boost_saturation, gp.shade_boost_gamma);
 
+    const auto& go = r.graphics.osd;
+    FrontendLog(RETRO_LOG_INFO,
+        "[CoreOptions] graphics.osd: scale=%d margin=%d msg_pos=%d "
+        "perf_pos=%d bold=%s",
+        go.osd_scale, go.osd_margin, go.osd_messages_pos,
+        go.osd_performance_pos,
+        go.osd_bold_text ? "on" : "off");
+    FrontendLog(RETRO_LOG_INFO,
+        "[CoreOptions] graphics.osd.perf:  spd=%s fps=%s vps=%s res=%s "
+        "gs=%s cpu=%s gpu=%s ind=%s ft=%s",
+        go.osd_show_speed       ? "on" : "off",
+        go.osd_show_fps         ? "on" : "off",
+        go.osd_show_vps         ? "on" : "off",
+        go.osd_show_resolution  ? "on" : "off",
+        go.osd_show_gs_stats    ? "on" : "off",
+        go.osd_show_cpu         ? "on" : "off",
+        go.osd_show_gpu         ? "on" : "off",
+        go.osd_show_indicators  ? "on" : "off",
+        go.osd_show_frame_times ? "on" : "off");
+    FrontendLog(RETRO_LOG_INFO,
+        "[CoreOptions] graphics.osd.sys:   hw=%s ver=%s",
+        go.osd_show_hardware_info ? "on" : "off",
+        go.osd_show_version       ? "on" : "off");
+    FrontendLog(RETRO_LOG_INFO,
+        "[CoreOptions] graphics.osd.input: set=%s pat=%s inp=%s vc=%s "
+        "ir=%s tr=%s",
+        go.osd_show_settings              ? "on" : "off",
+        go.osd_show_patches               ? "on" : "off",
+        go.osd_show_inputs                ? "on" : "off",
+        go.osd_show_video_capture         ? "on" : "off",
+        go.osd_show_input_rec             ? "on" : "off",
+        go.osd_show_texture_replacements  ? "on" : "off");
+    FrontendLog(RETRO_LOG_INFO,
+        "[CoreOptions] graphics.osd.warn:  unsafe=%s",
+        go.warn_about_unsafe_settings ? "on" : "off");
+
     return r;
 }
 

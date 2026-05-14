@@ -118,7 +118,41 @@ struct Values
     } post_processing;
 
     struct Osd {
-        // Phase 4 Task 6 fills these.
+        // 23 knobs mirroring standalone PCSX2 Graphics/On-Screen Display
+        // sub-tab. 22 fields stored under [EmuCore/GS];
+        // warn_about_unsafe_settings stored under [EmuCore]. Defaults
+        // match PCSX2 source verbatim (Config.h:730-733,768-786 +
+        // Pcsx2Config.cpp:720-745,1943). OsdBoldText defaults to false
+        // because the bitfield zero-inits and there is no explicit
+        // assignment in Defaults() — the standalone adapter's
+        // default="true" is incorrect (separate SP7c followup).
+        int  osd_scale            = 100;   // px-scale, neutral=100
+        int  osd_margin           = 10;    // px from screen edge
+        int  osd_messages_pos     = 1;     // OsdOverlayPos::TopLeft
+        int  osd_performance_pos  = 3;     // OsdOverlayPos::TopRight
+        bool osd_bold_text        = false;
+        // Performance Stats group (9)
+        bool osd_show_speed         = false;
+        bool osd_show_fps           = false;
+        bool osd_show_vps           = false;
+        bool osd_show_resolution    = false;
+        bool osd_show_gs_stats      = false;
+        bool osd_show_cpu           = false;
+        bool osd_show_gpu           = false;
+        bool osd_show_indicators    = true;   // ← only non-false in PerfStats
+        bool osd_show_frame_times   = false;
+        // System Information group (2)
+        bool osd_show_hardware_info = false;
+        bool osd_show_version       = false;
+        // Settings & Inputs group (6)
+        bool osd_show_settings              = false;
+        bool osd_show_patches               = false;
+        bool osd_show_inputs                = false;
+        bool osd_show_video_capture         = true;   // libretro-inert
+        bool osd_show_input_rec             = true;   // libretro-inert
+        bool osd_show_texture_replacements  = false;
+        // Messages group (1) — stored under [EmuCore]
+        bool warn_about_unsafe_settings     = true;
     } osd;
 };
 

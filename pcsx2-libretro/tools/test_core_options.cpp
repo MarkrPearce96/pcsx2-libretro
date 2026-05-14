@@ -594,6 +594,105 @@ int main()
     check_int ("Case 16b shade_boost_gamma default=50",
                 r.graphics.post_processing.shade_boost_gamma, 50);
 
+    // -------- Case 17: Graphics/OSD round-trip --------
+    //
+    // 10 representative non-default flips covering each value flavor in
+    // the OSD sub-tab. Tests Parse only — dependsOn resolution is
+    // host-side and not exercised here.
+    fake::reset();
+    fake::variables["pcsx2_osd_scale"]                  = "200";
+    fake::variables["pcsx2_osd_margin"]                 = "30";
+    fake::variables["pcsx2_osd_messages_pos"]           = "5";   // Center
+    fake::variables["pcsx2_osd_performance_pos"]        = "9";   // BottomRight
+    fake::variables["pcsx2_osd_bold_text"]              = "enabled";
+    fake::variables["pcsx2_osd_show_fps"]               = "enabled";
+    fake::variables["pcsx2_osd_show_indicators"]        = "disabled"; // flips true→false
+    fake::variables["pcsx2_osd_show_settings"]          = "enabled";
+    fake::variables["pcsx2_osd_show_patches"]           = "enabled";
+    fake::variables["pcsx2_warn_about_unsafe_settings"] = "disabled"; // flips true→false
+
+    r = ReadResolved(&fake_env_cb);
+    check_int ("Case 17 osd_scale=200",
+                r.graphics.osd.osd_scale, 200);
+    check_int ("Case 17 osd_margin=30",
+                r.graphics.osd.osd_margin, 30);
+    check_int ("Case 17 osd_messages_pos=5 (Center)",
+                r.graphics.osd.osd_messages_pos, 5);
+    check_int ("Case 17 osd_performance_pos=9 (BottomRight)",
+                r.graphics.osd.osd_performance_pos, 9);
+    check_bool("Case 17 osd_bold_text=on",
+                r.graphics.osd.osd_bold_text, true);
+    check_bool("Case 17 osd_show_fps=on",
+                r.graphics.osd.osd_show_fps, true);
+    check_bool("Case 17 osd_show_indicators=off (flip true→false)",
+                r.graphics.osd.osd_show_indicators, false);
+    check_bool("Case 17 osd_show_settings=on",
+                r.graphics.osd.osd_show_settings, true);
+    check_bool("Case 17 osd_show_patches=on",
+                r.graphics.osd.osd_show_patches, true);
+    check_bool("Case 17 warn_about_unsafe_settings=off (flip true→false)",
+                r.graphics.osd.warn_about_unsafe_settings, false);
+
+    // -------- Case 17b: Graphics/OSD default-when-unset --------
+    //
+    // Asserts all 23 OSD field defaults explicitly. Anchored on the
+    // 4 non-false bool defaults (osd_show_indicators=true,
+    // osd_show_video_capture=true, osd_show_input_rec=true,
+    // warn_about_unsafe_settings=true) plus osd_bold_text=false
+    // (catches anyone who follows the standalone adapter's incorrect
+    // default="true" — actual PCSX2 runtime default is false because
+    // the bitfield zero-inits and Pcsx2Config.cpp:720-745 has no
+    // OsdBoldText assignment).
+    fake::reset();
+
+    r = ReadResolved(&fake_env_cb);
+    check_int ("Case 17b osd_scale default=100",
+                r.graphics.osd.osd_scale, 100);
+    check_int ("Case 17b osd_margin default=10",
+                r.graphics.osd.osd_margin, 10);
+    check_int ("Case 17b osd_messages_pos default=1 (TopLeft)",
+                r.graphics.osd.osd_messages_pos, 1);
+    check_int ("Case 17b osd_performance_pos default=3 (TopRight)",
+                r.graphics.osd.osd_performance_pos, 3);
+    check_bool("Case 17b osd_bold_text default=off (bitfield zero-init, adapter says true)",
+                r.graphics.osd.osd_bold_text, false);
+    check_bool("Case 17b osd_show_speed default=off",
+                r.graphics.osd.osd_show_speed, false);
+    check_bool("Case 17b osd_show_fps default=off",
+                r.graphics.osd.osd_show_fps, false);
+    check_bool("Case 17b osd_show_vps default=off",
+                r.graphics.osd.osd_show_vps, false);
+    check_bool("Case 17b osd_show_resolution default=off",
+                r.graphics.osd.osd_show_resolution, false);
+    check_bool("Case 17b osd_show_gs_stats default=off",
+                r.graphics.osd.osd_show_gs_stats, false);
+    check_bool("Case 17b osd_show_cpu default=off",
+                r.graphics.osd.osd_show_cpu, false);
+    check_bool("Case 17b osd_show_gpu default=off",
+                r.graphics.osd.osd_show_gpu, false);
+    check_bool("Case 17b osd_show_indicators default=on (non-false anchor)",
+                r.graphics.osd.osd_show_indicators, true);
+    check_bool("Case 17b osd_show_frame_times default=off",
+                r.graphics.osd.osd_show_frame_times, false);
+    check_bool("Case 17b osd_show_hardware_info default=off",
+                r.graphics.osd.osd_show_hardware_info, false);
+    check_bool("Case 17b osd_show_version default=off",
+                r.graphics.osd.osd_show_version, false);
+    check_bool("Case 17b osd_show_settings default=off",
+                r.graphics.osd.osd_show_settings, false);
+    check_bool("Case 17b osd_show_patches default=off",
+                r.graphics.osd.osd_show_patches, false);
+    check_bool("Case 17b osd_show_inputs default=off",
+                r.graphics.osd.osd_show_inputs, false);
+    check_bool("Case 17b osd_show_video_capture default=on (non-false anchor, libretro-inert)",
+                r.graphics.osd.osd_show_video_capture, true);
+    check_bool("Case 17b osd_show_input_rec default=on (non-false anchor, libretro-inert)",
+                r.graphics.osd.osd_show_input_rec, true);
+    check_bool("Case 17b osd_show_texture_replacements default=off",
+                r.graphics.osd.osd_show_texture_replacements, false);
+    check_bool("Case 17b warn_about_unsafe_settings default=on (non-false anchor, [EmuCore] section)",
+                r.graphics.osd.warn_about_unsafe_settings, true);
+
     std::printf("\n%d failure(s)\n", failures);
     return failures == 0 ? 0 : 1;
 }
