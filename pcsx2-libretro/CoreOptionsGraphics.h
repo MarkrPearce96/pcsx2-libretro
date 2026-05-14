@@ -85,7 +85,18 @@ struct Values
     } rendering;
 
     struct TextureReplacement {
-        // Phase 4 Task 4 fills these.
+        // 6 knobs mirroring standalone PCSX2 Graphics/Texture Replacement
+        // sub-tab. All stored as INI under [EmuCore/GS]. Defaults match
+        // pcsx2_adapter.cpp Graphics/Texture-Replacement rows verbatim so
+        // a missing options.json reproduces standalone's out-of-the-box
+        // behavior. The search-directory picker is dropped (RetroNest
+        // manages EmuFolders::Textures from SP1).
+        bool load_texture_replacements        = false;
+        bool dump_replaceable_textures        = false;
+        bool load_texture_replacements_async  = true;  // only non-false default
+        bool precache_texture_replacements    = false;
+        bool dump_replaceable_mipmaps         = false;
+        bool dump_textures_with_fmv_active    = false;
     } texture_replacement;
 
     struct PostProcessing {

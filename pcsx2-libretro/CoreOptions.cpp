@@ -163,6 +163,17 @@ Resolved ReadResolved(retro_environment_t cb)
         gr.max_anisotropy, gr.dithering_ps2, gr.accurate_blending_unit,
         gr.hw_mipmap ? "on" : "off");
 
+    const auto& gt = r.graphics.texture_replacement;
+    FrontendLog(RETRO_LOG_INFO,
+        "[CoreOptions] graphics.texrep: load=%s dump_tex=%s async=%s "
+        "precache=%s dump_mip=%s dump_fmv=%s",
+        gt.load_texture_replacements       ? "on" : "off",
+        gt.dump_replaceable_textures       ? "on" : "off",
+        gt.load_texture_replacements_async ? "on" : "off",
+        gt.precache_texture_replacements   ? "on" : "off",
+        gt.dump_replaceable_mipmaps        ? "on" : "off",
+        gt.dump_textures_with_fmv_active   ? "on" : "off");
+
     return r;
 }
 
