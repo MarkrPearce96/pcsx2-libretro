@@ -250,6 +250,45 @@ void EmuThread::ThreadFunc(VMBootParameters params)
     // enter Execute, which handles the reset internally and returns once
     // state stabilizes.
     VMManager::SetState(VMState::Running);
+    // PCSX2 has several internal code paths that call SetPaused(true) on
+    // fatal-ish runtime errors and rely on the standalone Qt UI to surface
+    // a dialog + resume button:
+    //   - pcsx2/x86/ix86-32/iR5900.cpp:514 — EE recompiler "Jump to
+    //     unmapped recLUT page" / "Jump to unaligned address" (followed
+    //     by recExitExecution() which longjmps out of dispatch)
+    //   - pcsx2/vtlb.cpp:537,557 — TLB miss / Bus Error (if PauseOnTLBMiss)
+    //   - pcsx2/x86/iR3000A.cpp:274,1325,1359 — IOP recompiler errors
+    //   - pcsx2/Achievements.cpp:3735 — hardcore-mode violations
+    //   - pcsx2/Host/AudioStream.cpp:486 — audio backend failure
+    //   - pcsx2/Recording/InputRecording.cpp:247 — input-recording errors
+    //
+    // The libretro shell has no UI to surface these, so the original
+    // pre-instrumentation loop just slept forever in the Paused branch.
+    // User-visible: "game frozen, audio buffer looping," and if save+quit
+    // fires during this state the resume file captures the paused VM —
+    // so subsequent resumes reload the frozen state and the user has to
+    // manually delete the .resume file to recover.
+    //
+    // Attempting auto-resume via SetPaused(false) is unsafe: at least
+    // iR5900.cpp:515 calls recExitExecution() AFTER SetPaused(true), which
+    // longjmps the recompiler out of dispatch. Re-entering Execute() from
+    // that state SIGSEGVs the process (verified live).
+    //
+    // Correct recovery is to TERMINATE the libretro session gracefully:
+    // request m_stop_requested so the EmuThread joins cleanly, the
+    // libretro core unloads, and RetroNest returns the user to its home
+    // screen with a frame buffer's worth of error feedback (via the
+    // R5900 Exception log line that fired BEFORE the pause). The user's
+    // bad-state resume file remains on disk but at least they're not
+    // stuck staring at a frozen frame.
+    //
+    // The 500ms threshold is comfortably longer than SP6.5's
+    // WaitForVmPaused handshake (typically <16ms) plus the work window
+    // for in-flight save-state probes (~50-200ms), so we don't false-
+    // trigger on legitimate pause/resume cycles.
+    using clock = std::chrono::steady_clock;
+    auto paused_since = clock::time_point{};
+    bool fatal_pause_logged = false;
     while (true)
     {
         if (m_stop_requested.load(std::memory_order_acquire))
@@ -262,9 +301,39 @@ void EmuThread::ThreadFunc(VMBootParameters params)
             break;
         if (s == VMState::Paused)
         {
+            if (paused_since == clock::time_point{})
+                paused_since = clock::now();
+            const auto paused_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                clock::now() - paused_since).count();
+            if (!fatal_pause_logged && paused_ms >= 500)
+            {
+                FrontendLog(RETRO_LOG_ERROR,
+                    "EmuThread: VM paused for >=500ms without shutdown — "
+                    "a PCSX2 internal code path called SetPaused(true) "
+                    "(check for a preceding R5900 Exception / TLB miss / "
+                    "Bus Error log line). Terminating libretro session "
+                    "rather than freezing forever; user returns to "
+                    "RetroNest menu.");
+                fatal_pause_logged = true;
+            }
+            if (paused_ms >= 1000)
+            {
+                FrontendLog(RETRO_LOG_WARN,
+                    "EmuThread: requesting shutdown after %lldms of "
+                    "unexpected Paused state.",
+                    static_cast<long long>(paused_ms));
+                m_stop_requested.store(true, std::memory_order_release);
+                // Next loop iteration takes the m_stop_requested branch
+                // above and exits cleanly via SetState(Stopping).
+                continue;
+            }
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
             continue;
         }
+        // Any non-Paused observation resets the tracking — the next
+        // Paused is a fresh event.
+        paused_since = clock::time_point{};
+        fatal_pause_logged = false;
         VMManager::Execute();
     }
 
