@@ -35,6 +35,7 @@
 #include "common/WindowInfo.h"
 
 #include "LibretroFrontend.h"
+#include "MacNSViewMetrics.h"
 #include "Settings.h"
 
 #include <atomic>
@@ -270,12 +271,28 @@ std::optional<WindowInfo> Host::AcquireRenderWindow(bool /*recreate_window*/)
 
     Pcsx2Libretro::FrontendLog(RETRO_LOG_INFO, "AcquireRenderWindow: got NSView=%p", ns_view);
 
+    // Query the actual NSView dimensions. PCSX2's CalculateDrawDstRect
+    // (GSRenderer.cpp:314) uses WindowInfo::surface_width/height as the
+    // "client" surface for its aspect-fit math; passing the PS2 native
+    // 640x448 here would make PCSX2 letterbox 16:9 against a 1.43:1
+    // surface (~10% bars) regardless of the actual screen aspect.
+    // Standalone PCSX2 reads its own NSWindow size for this — we mirror
+    // that. Fallback to PS2-native if Query returns zero (NSView not yet
+    // realized / sized), which preserves the previous behavior in the
+    // degenerate case.
+    const auto metrics = Pcsx2Libretro::Mac::Query(ns_view);
+    const u32 sw = (metrics.surface_width  > 0) ? metrics.surface_width  : 640;
+    const u32 sh = (metrics.surface_height > 0) ? metrics.surface_height : 448;
+    const float ss = (metrics.surface_scale > 0.0f) ? metrics.surface_scale : 1.0f;
+    Pcsx2Libretro::FrontendLog(RETRO_LOG_INFO,
+        "AcquireRenderWindow: surface=%ux%u scale=%.2f", sw, sh, ss);
+
     WindowInfo wi{};
     wi.type = WindowInfo::Type::MacOS;
     wi.window_handle = ns_view;
-    wi.surface_width = 640;
-    wi.surface_height = 448;
-    wi.surface_scale = 1.0f;
+    wi.surface_width = sw;
+    wi.surface_height = sh;
+    wi.surface_scale = ss;
     wi.surface_refresh_rate = 60.0f;
     return wi;
 }

@@ -23,7 +23,13 @@ target_sources(pcsx2_libretro PRIVATE
     CoreOptionsMemoryCards.cpp
     CoreResources.cpp
     AspectRatio.cpp
+    MacNSViewMetrics.mm
 )
+
+# The PCSX2 PCH is C++-only; .mm files re-enable Objective-C and the PCH
+# rejects them with "Objective-C was disabled in precompiled file". Skip
+# the PCH for any Objective-C++ sources.
+set_source_files_properties(MacNSViewMetrics.mm PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 
 target_include_directories(pcsx2_libretro PRIVATE
     "${CMAKE_BINARY_DIR}/common/include"
