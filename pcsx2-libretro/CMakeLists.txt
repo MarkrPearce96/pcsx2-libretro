@@ -22,6 +22,7 @@ target_sources(pcsx2_libretro PRIVATE
     CoreOptionsGraphics.cpp
     CoreOptionsMemoryCards.cpp
     CoreResources.cpp
+    AspectRatio.cpp
 )
 
 target_include_directories(pcsx2_libretro PRIVATE
