@@ -7,10 +7,11 @@
 // upstream). Reads GSConfig.AspectRatio, EmuConfig.CurrentCustomAspectRatio,
 // and gsVideoMode (for the Auto branch's progressive detection).
 //
-// Stretch returns 4.0f/3.0f in v1 — RetroNest's display item treats
-// aspect_ratio <= 0 as a fallback to 4:3, not as "fill". Stretch-as-fill
-// is delivered via RetroNest's per-emulator aspect mode, not this option.
-// See spec 2026-05-18-pcsx2-libretro-aspect-ratio-design.md for rationale.
+// Stretch returns 0.0f — libretro's "no aspect specified" sentinel.
+// Frontends that honor it (RetroNest as of 2026-05-19) fill the display
+// item edge-to-edge, matching standalone PCSX2's Stretch semantics.
+// Frontends that don't honor it fall back to their own default (usually
+// 4:3). See spec 2026-05-19-retronest-libretro-stretch-flow-through-design.md.
 
 #pragma once
 
