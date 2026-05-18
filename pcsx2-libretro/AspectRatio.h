@@ -4,7 +4,7 @@
 // pcsx2-libretro — translates PCSX2's display aspect to a libretro float.
 //
 // Mirrors GSRenderer's GetCurrentAspectRatioFloat (which is file-static
-// upstream). Reads EmuConfig.GS.AspectRatio, EmuConfig.CurrentCustomAspectRatio,
+// upstream). Reads GSConfig.AspectRatio, EmuConfig.CurrentCustomAspectRatio,
 // and gsVideoMode (for the Auto branch's progressive detection).
 //
 // Stretch returns 4.0f/3.0f in v1 — RetroNest's display item treats
