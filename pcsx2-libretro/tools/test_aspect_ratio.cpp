@@ -49,6 +49,12 @@ int main()
     // Stretch: 4:3 fallback per spec (v1).
     check("Stretch → 4:3",  ComputeFromInputs(AR_STRETCH, 0.0f, VM_NTSC),       4.0f / 3.0f);
     check("Stretch ignores custom", ComputeFromInputs(AR_STRETCH, 1.777f, VM_NTSC), 4.0f / 3.0f);
+    // Stretch deliberately diverges from upstream here — GSRenderer's
+    // GetCurrentAspectRatioFloat would fall through to the Auto branch
+    // and return 3:2 for progressive. Our v1 collapses Stretch to a
+    // fixed 4:3 (spec: RetroNest's per-emulator stretch mode handles fill).
+    check("Stretch + SDTV_480P stays 4:3",
+                                     ComputeFromInputs(AR_STRETCH, 0.0f, VM_SDTV_480P),    4.0f / 3.0f);
 
     // Auto branch — no patch override, interlaced → 4:3.
     check("Auto NTSC interlaced",   ComputeFromInputs(AR_AUTO, 0.0f, VM_NTSC),       4.0f / 3.0f);
