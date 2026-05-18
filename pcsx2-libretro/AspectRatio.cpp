@@ -6,6 +6,7 @@
 #ifndef SP_ASPECT_TEST_ONLY
 #include "pcsx2/Config.h"   // EmuConfig, AspectRatioType
 #include "pcsx2/GS.h"       // gsVideoMode, GS_VideoMode
+#include "pcsx2/GS/GS.h"   // GSConfig
 #endif
 
 namespace Pcsx2Libretro::AspectRatio
@@ -52,10 +53,21 @@ float ComputeFromInputs(int aspect_ratio_enum, float custom_override, int video_
 }
 
 #ifndef SP_ASPECT_TEST_ONLY
+// GSConfig.AspectRatio is the GS thread's live snapshot of the applied
+// aspect setting — mirrors what GetCurrentAspectRatioFloat (GSRenderer.cpp:293)
+// reads. EmuConfig.GS.AspectRatio is the user-settings-layer value, which
+// updates BEFORE GSConfig on option change; reporting from the settings
+// layer would size the frontend's surface ahead of the renderer for one
+// frame. GSConfig is the synchronized view.
+//
+// Cross-thread read: GSConfig is written by the GS thread and read here
+// from the host thread without a lock. Aligned u8 load is atomic at the
+// instruction level on x86_64/arm64; worst case is one extra refinement
+// cycle. Same data-race policy as gsVideoMode in LibretroFrontend.cpp:374.
 float Compute()
 {
     return ComputeFromInputs(
-        static_cast<int>(EmuConfig.GS.AspectRatio),
+        static_cast<int>(GSConfig.AspectRatio),
         EmuConfig.CurrentCustomAspectRatio,
         static_cast<int>(gsVideoMode));
 }

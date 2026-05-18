@@ -26,5 +26,10 @@ namespace Pcsx2Libretro::AspectRatio
 
     // Reads the three PCSX2 globals and calls ComputeFromInputs.
     // Call from retro_get_system_av_info / retro_run only.
+    // Gated out of standalone-test builds (SP_ASPECT_TEST_ONLY); the test
+    // exercises ComputeFromInputs directly and never links the production
+    // .cpp's globals-reading wrapper.
+#ifndef SP_ASPECT_TEST_ONLY
     float Compute();
+#endif
 }
