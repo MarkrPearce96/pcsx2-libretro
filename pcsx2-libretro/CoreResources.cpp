@@ -18,6 +18,9 @@
 
 #include "CoreResources.h"
 
+#include <array>
+#include <string>
+
 #include <string>
 
 namespace Pcsx2Libretro::CoreResources
@@ -25,29 +28,48 @@ namespace Pcsx2Libretro::CoreResources
 
 namespace
 {
-    // Region/fps constants shared by all three detection paths. NTSC=0 / PAL=1
-    // match RETRO_REGION_NTSC / RETRO_REGION_PAL from libretro.h:450-451 — the
-    // literal values are pinned here so DetectRegionFromSerialPrefix can stay
-    // pure C++ for the standalone unit test (which doesn't pull libretro.h).
-    constexpr unsigned kNtsc    = 0;
-    constexpr unsigned kPal     = 1;
-    constexpr double   kNtscFps = 59.94;
-    constexpr double   kPalFps  = 50.0;
+    // Region/fps constants (kNtsc, kPal, kNtscFps, kPalFps) are now public
+    // inline-constexpr in CoreResources.h so LibretroFrontend.cpp's default
+    // state init can reference them too. Reused via using-aliases below.
+    using Pcsx2Libretro::CoreResources::kNtsc;
+    using Pcsx2Libretro::CoreResources::kPal;
+    using Pcsx2Libretro::CoreResources::kNtscFps;
+    using Pcsx2Libretro::CoreResources::kPalFps;
 
-    // Single source of truth for "is this serial's 4-char prefix one
-    // recognised by DetectRegionFromSerialPrefix?". Used by Tier-3 in
-    // DetectRegionFromSerial to decide whether the WARN log fires.
-    // If a new prefix is added to DetectRegionFromSerialPrefix below,
-    // it must be mirrored here, and vice versa.
-    bool IsKnownSerialPrefix(const std::string& serial)
+    // Single source of truth for the known PS2 serial prefixes. Both
+    // DetectRegionFromSerialPrefix (returns a region) and IsKnownSerialPrefix
+    // (used by DetectRegionFromSerial Tier-3 to decide whether the WARN log
+    // fires) go through ClassifyPrefix below. Previously these two functions
+    // each carried their own copy of the prefix list with a comment warning
+    // about keeping them in sync — easy to forget when adding a new region.
+    constexpr std::array<const char*, 4> kPalPrefixes = {
+        "SLES", "SCES", "SCED", "SLED",
+    };
+    // Documentation-only — fallthrough below also returns NTSC. Listing the
+    // known-NTSC prefixes explicitly makes the supported set obvious at the
+    // call site rather than implicit-via-everything-else.
+    constexpr std::array<const char*, 9> kNtscPrefixes = {
+        "SCUS", "SLUS", "SCAJ", "SLPS", "SLPM",
+        "SCKA", "SLKA", "SCKR", "PSXC",
+    };
+
+    enum class PrefixClass { Pal, Ntsc, Unknown };
+
+    PrefixClass ClassifyPrefix(const std::string& serial)
     {
         if (serial.size() < 4)
-            return false;
+            return PrefixClass::Unknown;
         const std::string p = serial.substr(0, 4);
-        return p == "SLES" || p == "SCES" || p == "SCED" || p == "SLED"
-            || p == "SCUS" || p == "SLUS" || p == "SCAJ" || p == "SLPS"
-            || p == "SLPM" || p == "SCKA" || p == "SLKA" || p == "SCKR"
-            || p == "PSXC";
+        for (const char* x : kPalPrefixes)
+            if (p == x) return PrefixClass::Pal;
+        for (const char* x : kNtscPrefixes)
+            if (p == x) return PrefixClass::Ntsc;
+        return PrefixClass::Unknown;
+    }
+
+    bool IsKnownSerialPrefix(const std::string& serial)
+    {
+        return ClassifyPrefix(serial) != PrefixClass::Unknown;
     }
 }
 
@@ -175,38 +197,19 @@ std::optional<DetectedRegion> RegionFromGsVideoMode(GS_VideoMode mode)
 
 DetectedRegion DetectRegionFromSerialPrefix(const std::string& serial)
 {
-    constexpr unsigned NTSC = 0; // RETRO_REGION_NTSC
-    constexpr unsigned PAL  = 1; // RETRO_REGION_PAL
-    constexpr double NTSC_FPS = 59.94;
-    constexpr double PAL_FPS  = 50.0;
-
-    // Canonical form is PREFIX-NNNNN (per ExecutablePathToSerial in
-    // pcsx2/CDVD/CDVD.cpp:525). Prefix is always the first 4 chars,
-    // uppercase. Anything shorter than 4 chars can't be a valid serial.
-    if (serial.size() < 4)
-        return {NTSC, NTSC_FPS};
-
-    const std::string prefix = serial.substr(0, 4);
-
-    // PAL territories (Europe/Australia).
-    if (prefix == "SLES" || prefix == "SCES"
-        || prefix == "SCED" || prefix == "SLED")
-        return {PAL, PAL_FPS};
-
-    // NTSC territories (US, Japan, Korea, Asia). This branch is
-    // documentation-only — the fallthrough below also returns NTSC.
-    // It's retained so the known-NTSC prefix set is explicit at the
-    // call site rather than implicit via "everything not PAL".
-    if (prefix == "SCUS" || prefix == "SLUS"
-        || prefix == "SCAJ" || prefix == "SLPS" || prefix == "SLPM"
-        || prefix == "SCKA" || prefix == "SLKA" || prefix == "SCKR"
-        || prefix == "PSXC")
-        return {NTSC, NTSC_FPS};
-
-    // Unknown prefix — default NTSC. Caller (DetectRegionFromSerial) is
-    // responsible for logging a WARN; this function is pure for unit
-    // testability.
-    return {NTSC, NTSC_FPS};
+    // Prefix classification: Pal / Ntsc / Unknown via the shared
+    // ClassifyPrefix helper in the anonymous namespace above. Unknown
+    // falls through to NTSC default; caller (DetectRegionFromSerial) is
+    // responsible for logging a WARN. This function stays pure for the
+    // standalone unit-test build (-DSP7A_TEST_PREFIX_ONLY).
+    switch (ClassifyPrefix(serial))
+    {
+        case PrefixClass::Pal:     return {kPal,  kPalFps};
+        case PrefixClass::Ntsc:    return {kNtsc, kNtscFps};
+        case PrefixClass::Unknown: return {kNtsc, kNtscFps};
+    }
+    // Unreachable — enum is exhaustive.
+    return {kNtsc, kNtscFps};
 }
 
 } // namespace Pcsx2Libretro::CoreResources

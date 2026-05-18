@@ -19,6 +19,19 @@ enum class GS_VideoMode : int;
 
 namespace Pcsx2Libretro::CoreResources
 {
+    // Region/fps constants shared by every detection path AND by the
+    // LibretroFrontend default-state init. Values match RETRO_REGION_NTSC /
+    // RETRO_REGION_PAL from libretro.h:450-451 — pinned here so the
+    // standalone unit test (DetectRegionFromSerialPrefix) can compile
+    // without pulling libretro.h. Previously duplicated across
+    // CoreResources.cpp's anonymous namespace + DetectRegionFromSerialPrefix's
+    // local constexpr + LibretroFrontend.cpp's `59.94` literals; consolidated
+    // here so adding a new region (e.g. NTSC-J 59.82) is a one-line change.
+    inline constexpr unsigned kNtsc    = 0;
+    inline constexpr unsigned kPal     = 1;
+    inline constexpr double   kNtscFps = 59.94;
+    inline constexpr double   kPalFps  = 50.0;
+
     struct DetectedRegion
     {
         unsigned libretro_region;  // RETRO_REGION_NTSC | RETRO_REGION_PAL

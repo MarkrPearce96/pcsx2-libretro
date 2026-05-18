@@ -114,12 +114,13 @@ std::string GetSaveDirectory()
     return s_cached;
 }
 
-// SP7a: cached region/fps reported to libretro. Defaults to NTSC/59.94
+// SP7a: cached region/fps reported to libretro. Defaults to NTSC/kNtscFps
 // until DetectRegionFromSerial runs in retro_load_game. The refined
 // flag gates the gsVideoMode-driven SET_SYSTEM_AV_INFO re-emit so we
-// never emit twice.
+// never emit twice. NTSC/PAL constants live in CoreResources.h as the
+// single source of truth.
 unsigned g_detected_region = RETRO_REGION_NTSC;
-double   g_detected_fps    = 59.94;
+double   g_detected_fps    = Pcsx2Libretro::CoreResources::kNtscFps;
 bool     g_region_refined  = false;
 
 // Atomic, used by retro_run to log VM state transitions only once.
@@ -584,7 +585,7 @@ RETRO_API bool retro_load_game(const struct retro_game_info* game)
     // gsVideoMode is still Uninitialized at this point; the retro_run
     // refinement pass picks it up once the EE has executed SetGsCrt.
     g_detected_region = RETRO_REGION_NTSC;
-    g_detected_fps    = 59.94;
+    g_detected_fps    = Pcsx2Libretro::CoreResources::kNtscFps;
     g_region_refined  = false;
     const std::string disc_serial = VMManager::GetDiscSerial();
     const auto detected = Pcsx2Libretro::CoreResources::DetectRegionFromSerial(disc_serial);
