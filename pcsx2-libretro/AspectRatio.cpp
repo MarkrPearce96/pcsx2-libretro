@@ -35,10 +35,13 @@ float ComputeFromInputs(int aspect_ratio_enum, float custom_override, int video_
         case kR10_7:   return 10.0f / 7.0f;
 
         case kStretch:
-            // See spec: RetroNest's aspect_ratio <= 0 fallback is 4:3, not
-            // fill. Stretch-as-fill is delivered via RetroNest's per-emulator
-            // aspect mode in v1; the libretro Stretch option is a no-op.
-            return 4.0f / 3.0f;
+            // Stretch signals "no aspect constraint" to the frontend.
+            // RetroNest interprets aspect_ratio == 0.0 as fill-the-display-
+            // item-edge-to-edge (same path as its explicit aspectMode ==
+            // "stretch"). Other libretro frontends fall back to their own
+            // default (typically 4:3) per libretro.h convention. See spec
+            // 2026-05-19-retronest-libretro-stretch-flow-through-design.md.
+            return 0.0f;
 
         case kAuto4_3_3_2:
         default:
