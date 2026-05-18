@@ -19,6 +19,7 @@
 #include "MemoryTypes.h"   // eeMem, Ps2MemSize::MainRam
 #include "CoreResources.h"
 #include "CoreOptions.h"
+#include "AspectRatio.h"
 
 #include <atomic>
 #include <chrono>
@@ -122,6 +123,13 @@ std::string GetSaveDirectory()
 unsigned g_detected_region = RETRO_REGION_NTSC;
 double   g_detected_fps    = Pcsx2Libretro::CoreResources::kNtscFps;
 bool     g_region_refined  = false;
+
+// Tracks the last aspect_ratio float we emitted via SET_SYSTEM_AV_INFO.
+// retro_run compares each frame; re-emits only when the value changes by
+// more than 0.001 (covers core-option toggles, widescreen-patch activation,
+// and progressive↔interlaced video-mode transitions in Auto mode). -1.0f
+// at startup forces first-frame emission to land in the cache.
+float    g_last_emitted_aspect = -1.0f;
 
 // Atomic, used by retro_run to log VM state transitions only once.
 std::atomic<bool> g_logged_running{false};
@@ -307,7 +315,7 @@ RETRO_API void retro_get_system_av_info(struct retro_system_av_info* info)
     info->geometry.base_height  = 448;
     info->geometry.max_width    = 1280;
     info->geometry.max_height   = 1024;
-    info->geometry.aspect_ratio = 4.0f / 3.0f;
+    info->geometry.aspect_ratio = AspectRatio::Compute();
     info->timing.fps            = g_detected_fps;
     info->timing.sample_rate    = 48000.0;
 
@@ -399,6 +407,34 @@ RETRO_API void retro_run(void)
                     g_detected_fps);
             }
             g_region_refined = true;
+        }
+    }
+
+    // Aspect ratio change detection. The current effective aspect can shift
+    // mid-session via three independent inputs:
+    //   1. user toggling pcsx2_aspect_ratio (libretro options layer)
+    //   2. widescreen patches activating (Patch.cpp:825 writes
+    //      EmuConfig.CurrentCustomAspectRatio in the Auto branch)
+    //   3. gsVideoMode progressive↔interlaced transitions in the Auto branch
+    // Compute() is ~5 enum compares per frame; the actual SET_SYSTEM_AV_INFO
+    // call is rare (gated on >0.001 float change).
+    {
+        const float current_aspect = AspectRatio::Compute();
+        if (std::fabs(current_aspect - g_last_emitted_aspect) > 0.001f)
+        {
+            retro_system_av_info av{};
+            retro_get_system_av_info(&av);
+            if (g_frontend.environ_cb)
+                g_frontend.environ_cb(RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO, &av);
+            // av.geometry.aspect_ratio (not current_aspect) is what the
+            // frontend actually received — retro_get_system_av_info called
+            // Compute() again, and on a cross-thread write window the two
+            // values can disagree. Cache what was emitted, not what we
+            // saw on the comparison read.
+            FrontendLog(RETRO_LOG_INFO,
+                "[AspectRatio] re-emitted aspect=%.4f (was %.4f)",
+                av.geometry.aspect_ratio, g_last_emitted_aspect);
+            g_last_emitted_aspect = av.geometry.aspect_ratio;
         }
     }
 
@@ -587,6 +623,7 @@ RETRO_API bool retro_load_game(const struct retro_game_info* game)
     g_detected_region = RETRO_REGION_NTSC;
     g_detected_fps    = Pcsx2Libretro::CoreResources::kNtscFps;
     g_region_refined  = false;
+    g_last_emitted_aspect = -1.0f;
     const std::string disc_serial = VMManager::GetDiscSerial();
     const auto detected = Pcsx2Libretro::CoreResources::DetectRegionFromSerial(disc_serial);
     g_detected_region = detected.libretro_region;
@@ -618,6 +655,7 @@ RETRO_API void retro_unload_game(void)
     g_memory_map_issued.store(false);     // re-issue on next game load
     g_logged_running.store(false);        // re-log on next Running
     g_region_refined  = false;            // re-run gsVideoMode refinement on next game load
+    g_last_emitted_aspect = -1.0f;        // force re-emit on next game's first frame
     Pcsx2Libretro::ResetSerializeSizeCache();  // re-probe on next game load (SP6.5)
     FrontendLog(RETRO_LOG_INFO, "retro_unload_game: requesting VM shutdown");
     Pcsx2Libretro::EmuThread& emu = Pcsx2Libretro::GetEmuThread();
