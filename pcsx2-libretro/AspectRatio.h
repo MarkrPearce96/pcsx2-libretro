@@ -7,11 +7,12 @@
 // upstream). Reads GSConfig.AspectRatio, EmuConfig.CurrentCustomAspectRatio,
 // and gsVideoMode (for the Auto branch's progressive detection).
 //
-// Stretch returns 0.0f — libretro's "no aspect specified" sentinel.
-// Frontends that honor it (RetroNest as of 2026-05-19) fill the display
-// item edge-to-edge, matching standalone PCSX2's Stretch semantics.
-// Frontends that don't honor it fall back to their own default (usually
-// 4:3). See spec 2026-05-19-retronest-libretro-stretch-flow-through-design.md.
+// Stretch returns 0.0f. libretro.h:6332 specifies that aspect_ratio <= 0
+// means the frontend should assume base_width / base_height (pixel aspect),
+// and notes that a frontend may ignore the setting. RetroNest (as of
+// 2026-05-19) takes 0.0 in "native" aspect mode as fill-the-display-item,
+// matching standalone PCSX2's Stretch behavior. See spec
+// 2026-05-19-retronest-libretro-stretch-flow-through-design.md.
 
 #pragma once
 
