@@ -284,11 +284,23 @@ void InitializeDefaults(const std::string& system_dir,
     {
         const std::string memcards_dir = save_dir + "/memcards";
         g_si.SetStringValue("Folders", "MemoryCards", memcards_dir.c_str());
+
+        // SP7c followup: same per-game rooting for replacement textures.
+        // PCSX2's GSTextureReplacements adds /<disc_serial>/ underneath
+        // via Path::Combine, so users drop textures into
+        //   <save_dir>/textures/<disc_serial>/...
+        // PCSX2's default (Folders/Textures = "textures") resolves
+        // relative to DataRoot, which on libretro is the dladdr-derived
+        // resources dir — not a user-writable location. Rooting under
+        // save_dir mirrors the memcards convention and gives users a
+        // stable, writable, per-game spot to drop replacement textures.
+        const std::string textures_dir = save_dir + "/textures";
+        g_si.SetStringValue("Folders", "Textures", textures_dir.c_str());
     }
     else
     {
         FrontendLog(RETRO_LOG_WARN,
-            "Host did not provide save_dir — memcards will use PCSX2 default location");
+            "Host did not provide save_dir — memcards + texture replacements will use PCSX2 default locations");
     }
 
     // Slot{1,2}_Enable are now owned by CoreOptions::MemoryCards::ApplyDefaults
