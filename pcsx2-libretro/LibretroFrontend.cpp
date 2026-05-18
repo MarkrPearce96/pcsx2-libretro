@@ -251,6 +251,24 @@ RETRO_API void retro_init(void)
     {
         g_frontend.log_cb = log_iface.log;
     }
+
+    // SP5.5: query rumble interface. Hosts that don't support rumble simply
+    // return false, leaving set_rumble_state null — LibretroInputSource's
+    // UpdateMotorState then silently no-ops. RetroNest exposes this via the
+    // weak/strong-bridge to SdlInputManager::setRumbleMotor (RetroNest
+    // commit e647577).
+    retro_rumble_interface rumble_iface{};
+    if (g_frontend.environ_cb &&
+        g_frontend.environ_cb(RETRO_ENVIRONMENT_GET_RUMBLE_INTERFACE, &rumble_iface))
+    {
+        g_frontend.set_rumble_state = rumble_iface.set_rumble_state;
+        FrontendLog(RETRO_LOG_INFO, "retro_init — rumble interface acquired");
+    }
+    else
+    {
+        FrontendLog(RETRO_LOG_INFO, "retro_init — rumble interface not available (host opt-out)");
+    }
+
     FrontendLog(RETRO_LOG_INFO, "retro_init — PCSX2 libretro skeleton initialised");
 }
 

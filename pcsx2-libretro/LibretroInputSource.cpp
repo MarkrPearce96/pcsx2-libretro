@@ -192,6 +192,13 @@ std::optional<InputBindingKey> LibretroInputSource::ParseKeyString(
         }
     }
 
+    // SP5.5: rumble motors. Naming + motor_index convention matches XInput /
+    // SDL sources (LargeMotor = strong = data 0; SmallMotor = weak = data 1).
+    if (binding == "LargeMotor")
+        return MakeGenericControllerMotorKey(InputSourceType::Libretro, *port, 0);
+    if (binding == "SmallMotor")
+        return MakeGenericControllerMotorKey(InputSourceType::Libretro, *port, 1);
+
     return std::nullopt;
 }
 
@@ -223,6 +230,14 @@ TinyString LibretroInputSource::ConvertKeyToString(InputBindingKey key, bool /*d
         }
     }
 
+    if (key.source_subtype == InputSubclass::ControllerMotor)
+    {
+        const char* name = (key.data == 0) ? "LargeMotor" : "SmallMotor";
+        TinyString result;
+        result.format("Libretro-{}/{}", static_cast<u32>(key.source_index), name);
+        return result;
+    }
+
     return TinyString();
 }
 
@@ -241,7 +256,19 @@ std::vector<std::pair<std::string, std::string>> LibretroInputSource::EnumerateD
 
 std::vector<InputBindingKey> LibretroInputSource::EnumerateMotors()
 {
-    return {}; // SP5: rumble deferred to SP5.5.
+    // Two motors per port. Both ports are always "connected" from PCSX2's
+    // perspective — libretro doesn't surface hotplug events, RetroNest
+    // funnels controller state into ports 0 and 1 regardless. If the host
+    // doesn't actually support rumble, set_rumble_state stays null and
+    // UpdateMotorState no-ops; PCSX2's rumble writes are then harmless.
+    std::vector<InputBindingKey> ret;
+    ret.reserve(NUM_PORTS * 2);
+    for (u32 port = 0; port < NUM_PORTS; ++port)
+    {
+        ret.push_back(MakeGenericControllerMotorKey(InputSourceType::Libretro, port, 0)); // Large
+        ret.push_back(MakeGenericControllerMotorKey(InputSourceType::Libretro, port, 1)); // Small
+    }
+    return ret;
 }
 
 bool LibretroInputSource::GetGenericBindingMapping(
@@ -279,6 +306,9 @@ bool LibretroInputSource::GetGenericBindingMapping(
     mapping->emplace_back(GenericInputBinding::RightStickDown,  prefix + "+RightY");
     mapping->emplace_back(GenericInputBinding::RightStickLeft,  prefix + "-RightX");
     mapping->emplace_back(GenericInputBinding::RightStickRight, prefix + "+RightX");
+    // SP5.5: rumble motor mappings — same names XInput / SDL sources use.
+    mapping->emplace_back(GenericInputBinding::LargeMotor, prefix + "LargeMotor");
+    mapping->emplace_back(GenericInputBinding::SmallMotor, prefix + "SmallMotor");
     return true;
 }
 
@@ -287,9 +317,26 @@ InputLayout LibretroInputSource::GetControllerLayout(u32 /*index*/)
     return InputLayout::Playstation;
 }
 
-void LibretroInputSource::UpdateMotorState(InputBindingKey /*key*/, float /*intensity*/)
+void LibretroInputSource::UpdateMotorState(InputBindingKey key, float intensity)
 {
-    // SP5: rumble deferred to SP5.5. Drop motor writes silently.
+    // SP5.5: route into RETRO_ENVIRONMENT_GET_RUMBLE_INTERFACE's
+    // set_rumble_state. Silently no-op if the host opted out (interface
+    // not advertised at retro_init time → g_frontend.set_rumble_state
+    // stays null) or if the key is malformed.
+    if (!g_frontend.set_rumble_state)
+        return;
+    if (key.source_type != InputSourceType::Libretro)
+        return;
+    if (key.source_subtype != InputSubclass::ControllerMotor)
+        return;
+    if (key.source_index >= NUM_PORTS)
+        return;
+
+    // Convention matches XInput / SDL sources: data 0 = LargeMotor (strong);
+    // any non-zero data = SmallMotor (weak).
+    const retro_rumble_effect effect = (key.data == 0) ? RETRO_RUMBLE_STRONG : RETRO_RUMBLE_WEAK;
+    const uint16_t strength = static_cast<uint16_t>(std::clamp(intensity, 0.0f, 1.0f) * 65535.0f);
+    g_frontend.set_rumble_state(key.source_index, effect, strength);
 }
 
 void LibretroInputSource::PollPort(u32 port)

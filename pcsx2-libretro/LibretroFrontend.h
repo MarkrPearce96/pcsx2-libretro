@@ -26,6 +26,11 @@ struct FrontendState
     retro_input_poll_t         input_poll_cb    = nullptr;
     retro_input_state_t        input_state_cb   = nullptr;
     retro_log_printf_t         log_cb           = nullptr;
+    // SP5.5: rumble function pointer fetched from
+    // RETRO_ENVIRONMENT_GET_RUMBLE_INTERFACE during retro_init. Stays null
+    // if the host doesn't advertise rumble support — LibretroInputSource
+    // then silently no-ops on motor writes.
+    retro_set_rumble_state_t   set_rumble_state = nullptr;
 };
 
 extern FrontendState g_frontend;

@@ -117,6 +117,10 @@ static void WriteDefaultPadBindings(MemorySettingsInterface& si)
         {"RDown",  "+RightY"},
         {"RLeft",  "-RightX"},
         {"RRight", "+RightX"},
+        // SP5.5: rumble motors. PadDualshock2 action names "LargeMotor" and
+        // "SmallMotor" — matches the convention XInput / SDL bindings use.
+        {"LargeMotor", "LargeMotor"},
+        {"SmallMotor", "SmallMotor"},
     };
 
     for (u32 port = 0; port < 2; ++port)
