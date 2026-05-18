@@ -35,12 +35,14 @@ float ComputeFromInputs(int aspect_ratio_enum, float custom_override, int video_
         case kR10_7:   return 10.0f / 7.0f;
 
         case kStretch:
-            // Stretch signals "no aspect constraint" to the frontend.
-            // RetroNest interprets aspect_ratio == 0.0 as fill-the-display-
-            // item-edge-to-edge (same path as its explicit aspectMode ==
-            // "stretch"). Other libretro frontends fall back to their own
-            // default (typically 4:3) per libretro.h convention. See spec
-            // 2026-05-19-retronest-libretro-stretch-flow-through-design.md.
+            // Emit 0.0 — libretro.h:6332 specifies that aspect_ratio <= 0
+            // means the frontend should assume base_width / base_height
+            // (i.e. pixel aspect). RetroNest's LibretroMetalItem instead
+            // takes 0.0 in "native" mode as fill-the-display-item-edge-to-
+            // edge, matching standalone PCSX2's Stretch behavior. Other
+            // libretro frontends apply their own interpretation per the
+            // libretro.h note "A frontend may ignore this setting." See
+            // spec 2026-05-19-retronest-libretro-stretch-flow-through-design.md.
             return 0.0f;
 
         case kAuto4_3_3_2:
