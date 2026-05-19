@@ -140,6 +140,14 @@ std::atomic<bool> g_logged_running{false};
 // VM init/shutdown cycles).
 std::atomic<bool> g_memory_map_issued{false};
 
+// Pause-on-menu prev-state across paired retronest_set_paused calls.
+// Shutdown = "not paused by us" sentinel (also what WaitForVmPaused
+// returns on the 200ms-deadline timeout — ResumeVm no-ops in both
+// cases, so the dual meaning is safe). Reset in retro_unload_game so
+// a session that ends while paused doesn't leak state into the next
+// game load.
+static VMState s_pause_prev_state = VMState::Shutdown;
+
 // SP6.5 Task 4.5: private env call agreed with RetroNest. RetroNest
 // stores the resume-state path in EnvironmentContext::bootStatePath
 // before retro_load_game; we query during retro_load_game and, if a
@@ -656,6 +664,7 @@ RETRO_API void retro_unload_game(void)
     g_logged_running.store(false);        // re-log on next Running
     g_region_refined  = false;            // re-run gsVideoMode refinement on next game load
     g_last_emitted_aspect = -1.0f;        // force re-emit on next game's first frame
+    s_pause_prev_state = VMState::Shutdown;   // clear pause state — don't leak into next game
     Pcsx2Libretro::ResetSerializeSizeCache();  // re-probe on next game load (SP6.5)
     FrontendLog(RETRO_LOG_INFO, "retro_unload_game: requesting VM shutdown");
     Pcsx2Libretro::EmuThread& emu = Pcsx2Libretro::GetEmuThread();
@@ -681,20 +690,18 @@ RETRO_API size_t retro_get_memory_size(unsigned) { return 0; }
 //
 // Thread expectations: called from the RetroNest GUI thread (Qt slot
 // fired by AppController::openLibretroOverlayMenu →
-// GameSession::pauseEmulation). s_prev_state is a function-local
-// static touched only from that thread.
-RETRO_API void retronest_set_paused(bool paused);
-void retronest_set_paused(bool paused)
+// GameSession::pauseEmulation). s_pause_prev_state is a file-scope
+// static touched only from that thread; reset in retro_unload_game.
+RETRO_API void retronest_set_paused(bool paused)
 {
-    static VMState s_prev_state = VMState::Shutdown;
     if (paused)
     {
-        s_prev_state = Pcsx2Libretro::WaitForVmPaused();
+        s_pause_prev_state = Pcsx2Libretro::WaitForVmPaused();
     }
     else
     {
-        Pcsx2Libretro::ResumeVm(s_prev_state);
-        s_prev_state = VMState::Shutdown;
+        Pcsx2Libretro::ResumeVm(s_pause_prev_state);
+        s_pause_prev_state = VMState::Shutdown;
     }
 }
 
