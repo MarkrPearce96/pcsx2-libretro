@@ -1,0 +1,18 @@
+# Standalone test binaries built from test_*.{c,cpp}. Each is a
+# Mach-O executable that ends up alongside its source. List explicitly
+# rather than `test_*` glob so adding a new test is a single line and
+# you can't accidentally shadow a source file.
+test_aspect_ratio
+test_aspect_ratio_review
+test_core_options
+test_loader
+test_rcheevos_hash
+test_region_prefix
+
+# Python bytecode from check_schema_fidelity.py
+__pycache__/
+
+# Developer convenience symlink to ../../bin/resources, created by the
+# review/smoke scripts so test binaries can find the runtime resources
+# tree without env vars. Path is relative and machine-local.
+resources
