@@ -325,6 +325,18 @@ void EmuThread::ThreadFunc(VMBootParameters params)
             break;
         if (s == VMState::Paused)
         {
+            // Host-initiated pause (in-game menu via retronest_set_paused) —
+            // can legitimately last arbitrarily long while the user reads the
+            // menu. Skip the watchdog, just sleep and re-check the state.
+            if (m_host_initiated_pause.load(std::memory_order_acquire))
+            {
+                paused_since = clock::time_point{};   // reset deadline so any
+                fatal_pause_logged = false;           // post-host watchdog cycle starts clean
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                continue;
+            }
+            // Internal SetPaused(true) — e.g. R5900 exception / TLB miss.
+            // 500ms warn + 1000ms force-shutdown as before.
             if (paused_since == clock::time_point{})
                 paused_since = clock::now();
             const auto paused_ms = std::chrono::duration_cast<std::chrono::milliseconds>(

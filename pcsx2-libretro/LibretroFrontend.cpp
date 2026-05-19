@@ -665,6 +665,7 @@ RETRO_API void retro_unload_game(void)
     g_region_refined  = false;            // re-run gsVideoMode refinement on next game load
     g_last_emitted_aspect = -1.0f;        // force re-emit on next game's first frame
     s_pause_prev_state = VMState::Shutdown;   // clear pause state — don't leak into next game
+    Pcsx2Libretro::GetEmuThread().SetHostInitiatedPause(false);  // clear suppression — don't leak into next game
     Pcsx2Libretro::ResetSerializeSizeCache();  // re-probe on next game load (SP6.5)
     FrontendLog(RETRO_LOG_INFO, "retro_unload_game: requesting VM shutdown");
     Pcsx2Libretro::EmuThread& emu = Pcsx2Libretro::GetEmuThread();
@@ -696,12 +697,21 @@ RETRO_API void retronest_set_paused(bool paused)
 {
     if (paused)
     {
+        // Mark the pause as host-initiated BEFORE WaitForVmPaused so
+        // the watchdog already sees the flag set when it observes the
+        // Paused state transition.
+        Pcsx2Libretro::GetEmuThread().SetHostInitiatedPause(true);
         s_pause_prev_state = Pcsx2Libretro::WaitForVmPaused();
     }
     else
     {
         Pcsx2Libretro::ResumeVm(s_pause_prev_state);
         s_pause_prev_state = VMState::Shutdown;
+        // Clear AFTER ResumeVm so the watchdog stays suppressed
+        // during the un-pause handshake (state may briefly be
+        // Paused during the SetPaused(false) → EmuThread observes
+        // Running transition).
+        Pcsx2Libretro::GetEmuThread().SetHostInitiatedPause(false);
     }
 }
 
