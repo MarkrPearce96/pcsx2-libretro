@@ -56,6 +56,13 @@ FrontendState g_frontend{};
 // Host::BeginPresentFrame after each rendered frame is ready to display.
 // We signal this condition variable, and retro_run waits on it to drive
 // frame-paced execution.
+// Tracks the NSView Host::AcquireRenderWindow returned in WindowInfo so
+// Host::RequestResizeHostDisplay can re-query it. Set in AcquireRenderWindow,
+// cleared in ReleaseRenderWindow / on AcquireRenderWindow failure paths.
+// Atomic because Acquire/Release run on the CPU thread while RequestResize
+// runs on the MTGS thread (called from GS.cpp's resize dispatch).
+namespace { std::atomic<void*> g_acquired_ns_view{nullptr}; }
+
 std::mutex g_present_mutex;
 std::condition_variable g_present_cv;
 std::atomic<bool> g_present_ready{false};
@@ -253,6 +260,7 @@ std::optional<WindowInfo> Host::AcquireRenderWindow(bool /*recreate_window*/)
     if (!Pcsx2Libretro::g_frontend.environ_cb)
     {
         Pcsx2Libretro::FrontendLog(RETRO_LOG_ERROR, "AcquireRenderWindow: no environ_cb available");
+        Pcsx2Libretro::g_acquired_ns_view.store(nullptr, std::memory_order_release);
         return std::nullopt;
     }
 
@@ -266,6 +274,7 @@ std::optional<WindowInfo> Host::AcquireRenderWindow(bool /*recreate_window*/)
         Pcsx2Libretro::FrontendLog(RETRO_LOG_ERROR,
             "AcquireRenderWindow: host did not provide an NSView (env command failed). "
             "RetroNest must instantiate LibretroMetalItem and register its NSView before retro_load_game.");
+        Pcsx2Libretro::g_acquired_ns_view.store(nullptr, std::memory_order_release);
         return std::nullopt;
     }
 
@@ -284,8 +293,14 @@ std::optional<WindowInfo> Host::AcquireRenderWindow(bool /*recreate_window*/)
     const u32 sw = (metrics.surface_width  > 0) ? metrics.surface_width  : 640;
     const u32 sh = (metrics.surface_height > 0) ? metrics.surface_height : 448;
     const float ss = (metrics.surface_scale > 0.0f) ? metrics.surface_scale : 1.0f;
+    const float rr = (metrics.refresh_rate  > 0.0f) ? metrics.refresh_rate  : 60.0f;
     Pcsx2Libretro::FrontendLog(RETRO_LOG_INFO,
-        "AcquireRenderWindow: surface=%ux%u scale=%.2f", sw, sh, ss);
+        "AcquireRenderWindow: surface=%ux%u scale=%.2f refresh=%.1fHz", sw, sh, ss, rr);
+
+    // Cache for RequestResizeHostDisplay (defined below). Cleared in
+    // ReleaseRenderWindow + on early-return paths above so the stale
+    // pointer never outlives the view.
+    Pcsx2Libretro::g_acquired_ns_view.store(ns_view, std::memory_order_release);
 
     WindowInfo wi{};
     wi.type = WindowInfo::Type::MacOS;
@@ -293,12 +308,15 @@ std::optional<WindowInfo> Host::AcquireRenderWindow(bool /*recreate_window*/)
     wi.surface_width = sw;
     wi.surface_height = sh;
     wi.surface_scale = ss;
-    wi.surface_refresh_rate = 60.0f;
+    wi.surface_refresh_rate = rr;
     return wi;
 }
 
 void Host::ReleaseRenderWindow()
 {
+    // Drop the cached pointer so RequestResizeHostDisplay can't dereference
+    // a NSView that's been torn down.
+    Pcsx2Libretro::g_acquired_ns_view.store(nullptr, std::memory_order_release);
 }
 
 void Host::BeginPresentFrame()
@@ -312,8 +330,23 @@ void Host::BeginPresentFrame()
     Pcsx2Libretro::g_present_cv.notify_one();
 }
 
-void Host::RequestResizeHostDisplay(s32 width, s32 height)
+void Host::RequestResizeHostDisplay(s32 /*width*/, s32 /*height*/)
 {
+    // PCSX2 calls this when its internal render resolution changes (e.g. an
+    // NTSC/PAL switch mid-game; see VMManager.cpp:957). Standalone PCSX2
+    // resizes its NSWindow to the requested dims and then calls
+    // GSResizeDisplayWindow with the *actual* new window size. We can't
+    // resize a libretro frontend's window, so the most faithful response is
+    // to ignore the requested dims and re-read whatever the NSView is right
+    // now — refreshing PCSX2's m_window_info if anything has actually
+    // changed (dock/undock, screen change, DPR change). Steady-state this
+    // is a no-op; event-driven it eliminates the stale-state window where
+    // aspect math would still see pre-event dimensions.
+    void* nsv = Pcsx2Libretro::g_acquired_ns_view.load(std::memory_order_acquire);
+    if (!nsv) return;
+    const auto m = Pcsx2Libretro::Mac::Query(nsv);
+    if (m.surface_width == 0 || m.surface_height == 0) return;
+    GSResizeDisplayWindow(m.surface_width, m.surface_height, m.surface_scale);
 }
 
 // ---------- VM lifecycle ----------
@@ -394,7 +427,11 @@ void Host::CancelGameListRefresh()
 
 bool Host::IsFullscreen()
 {
-    return false;
+    // RetroNest is borderless-fullscreen always (AppWindow.qml:84-92 sizes
+    // the QQuickWindow to screen.width/height every launch). Reporting
+    // false would cause PCSX2's hotkey/UI code paths to treat us as
+    // windowed; true matches what the user actually sees.
+    return true;
 }
 
 void Host::SetFullscreen(bool enabled)

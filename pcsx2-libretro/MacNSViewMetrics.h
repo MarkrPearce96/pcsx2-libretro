@@ -25,6 +25,9 @@ namespace Pcsx2Libretro::Mac
         uint32_t surface_height = 0;
         // Backing scale factor (1.0 on non-Retina, 2.0 on standard Retina).
         float    surface_scale  = 1.0f;
+        // Screen refresh rate in Hz (NSScreen.maximumFramesPerSecond).
+        // Falls back to 60.0f when the screen / API is unavailable.
+        float    refresh_rate   = 60.0f;
     };
 
     // Reads NSView.bounds (points) × NSWindow.backingScaleFactor.
