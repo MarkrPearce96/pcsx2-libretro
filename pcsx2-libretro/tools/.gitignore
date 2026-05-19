@@ -3,7 +3,6 @@
 # rather than `test_*` glob so adding a new test is a single line and
 # you can't accidentally shadow a source file.
 test_aspect_ratio
-test_aspect_ratio_review
 test_core_options
 test_loader
 test_rcheevos_hash
