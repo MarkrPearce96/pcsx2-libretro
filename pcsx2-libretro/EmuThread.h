@@ -51,6 +51,12 @@ public:
     // True between successful Start() and Join() (or thread exit).
     bool IsRunning() const;
 
+    // Toggle the host-initiated pause marker. Set true when RetroNest
+    // is about to enter a long pause via WaitForVmPaused; clear when
+    // resuming. Suppresses the EmuThread watchdog so legitimate
+    // user-driven pauses don't get terminated as fatal-state pauses.
+    void SetHostInitiatedPause(bool b) { m_host_initiated_pause.store(b, std::memory_order_release); }
+
 private:
     void ThreadFunc(VMBootParameters params);
 
@@ -73,6 +79,14 @@ private:
     // bounded timeout so a stalled CPU thread (BIOS idle waits where the
     // interpreter doesn't yield naturally) doesn't hang the host forever.
     std::atomic<bool> m_thread_done{false};
+
+    // Set by retronest_set_paused (host-initiated pause via in-game
+    // menu). When true, the watchdog in the main loop skips its
+    // 500ms / 1000ms timeout — host pauses can legitimately last
+    // arbitrarily long (user looking at the menu) without indicating
+    // a fatal R5900 exception. Reset by retronest_set_paused(false)
+    // when the menu closes and by retro_unload_game on session end.
+    std::atomic<bool> m_host_initiated_pause{false};
 };
 
 // Singleton accessor — declared here, defined in EmuThread.cpp.
