@@ -30,6 +30,32 @@ namespace
     MemorySettingsInterface g_si;
     bool g_initialized = false;
 
+    // RetroNest-private env enums for path overrides. Number must match
+    // RetroNest-Project's environment_callbacks.h exactly.
+    //   0x20003 = GET_MEMCARDS_DIR
+    //   0x20004 = GET_TEXTURES_DIR
+    // (0x20002 is GET_BOOT_STATE_PATH; see LibretroFrontend.cpp.)
+    // Each returns true with *data set to const char* when an override
+    // is configured; returns false otherwise. We fall through to the
+    // existing save_dir-based default when false comes back, so any
+    // host that doesn't implement these env enums keeps the prior
+    // behavior unchanged.
+    constexpr unsigned RETRONEST_ENVIRONMENT_GET_MEMCARDS_DIR =
+        (3u | RETRO_ENVIRONMENT_PRIVATE);
+    constexpr unsigned RETRONEST_ENVIRONMENT_GET_TEXTURES_DIR =
+        (4u | RETRO_ENVIRONMENT_PRIVATE);
+
+    // Returns the override for `env_id` from the host, or empty string.
+    // Pulled out for standalone unit testing — see tools/test_settings_overrides.cpp.
+    std::string QueryPathOverride(retro_environment_t cb, unsigned env_id)
+    {
+        if (!cb) return {};
+        const char* out = nullptr;
+        if (cb(env_id, &out) && out && out[0] != '\0')
+            return out;
+        return {};
+    }
+
     // Lives for the process lifetime. ImGuiManager::FontInfo holds a
     // std::span<const u8> into this buffer, and ImGui's font atlas is
     // configured with FontDataOwnedByAtlas=false (see ImGuiManager::AddTextFont),
@@ -301,6 +327,23 @@ void InitializeDefaults(const std::string& system_dir,
     {
         FrontendLog(RETRO_LOG_WARN,
             "Host did not provide save_dir — memcards + texture replacements will use PCSX2 default locations");
+    }
+
+    // Path-override layer: if the host advertises the new env enums
+    // (RetroNest does; RetroArch / other hosts don't), the user's chosen
+    // dir replaces the save_dir-derived default above. The env callback
+    // lives on the singleton FrontendState set in retro_set_environment;
+    // on hosts that don't implement these enums, QueryPathOverride
+    // returns empty and we keep the prior default.
+    {
+        retro_environment_t cb = g_frontend.environ_cb;  // from LibretroFrontend.h
+        const std::string mc = QueryPathOverride(cb, RETRONEST_ENVIRONMENT_GET_MEMCARDS_DIR);
+        if (!mc.empty())
+            g_si.SetStringValue("Folders", "MemoryCards", mc.c_str());
+
+        const std::string tex = QueryPathOverride(cb, RETRONEST_ENVIRONMENT_GET_TEXTURES_DIR);
+        if (!tex.empty())
+            g_si.SetStringValue("Folders", "Textures", tex.c_str());
     }
 
     // Slot{1,2}_Enable are now owned by CoreOptions::MemoryCards::ApplyDefaults
