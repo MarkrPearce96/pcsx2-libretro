@@ -49,6 +49,10 @@ static bool MockEnvWithMc(unsigned cmd, void* data) {
     return false;
 }
 static bool MockEnvAlwaysFalse(unsigned, void*) { return false; }
+static bool MockEnvReturnsTrueNullPtr(unsigned cmd, void* data) {
+    (void)cmd; (void)data;
+    return true;  // forgot to set *data
+}
 
 int main() {
     expect(QueryPathOverride(nullptr, RETRONEST_ENVIRONMENT_GET_MEMCARDS_DIR), "",
@@ -67,8 +71,11 @@ int main() {
     expect(QueryPathOverride(MockEnvWithMc, RETRONEST_ENVIRONMENT_GET_MEMCARDS_DIR), "",
            "cb returns empty string -> treated as unset");
 
+    expect(QueryPathOverride(MockEnvReturnsTrueNullPtr, RETRONEST_ENVIRONMENT_GET_MEMCARDS_DIR), "",
+           "cb returns true but out stays null -> empty");
+
     if (failures == 0)
-        std::printf("test_settings_overrides: OK (5/5)\n");
+        std::printf("test_settings_overrides: OK (6/6)\n");
     else
         std::printf("test_settings_overrides: %d FAILURES\n", failures);
     return failures;

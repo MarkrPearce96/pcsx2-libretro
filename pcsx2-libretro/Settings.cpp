@@ -329,23 +329,6 @@ void InitializeDefaults(const std::string& system_dir,
             "Host did not provide save_dir — memcards + texture replacements will use PCSX2 default locations");
     }
 
-    // Path-override layer: if the host advertises the new env enums
-    // (RetroNest does; RetroArch / other hosts don't), the user's chosen
-    // dir replaces the save_dir-derived default above. The env callback
-    // lives on the singleton FrontendState set in retro_set_environment;
-    // on hosts that don't implement these enums, QueryPathOverride
-    // returns empty and we keep the prior default.
-    {
-        retro_environment_t cb = g_frontend.environ_cb;  // from LibretroFrontend.h
-        const std::string mc = QueryPathOverride(cb, RETRONEST_ENVIRONMENT_GET_MEMCARDS_DIR);
-        if (!mc.empty())
-            g_si.SetStringValue("Folders", "MemoryCards", mc.c_str());
-
-        const std::string tex = QueryPathOverride(cb, RETRONEST_ENVIRONMENT_GET_TEXTURES_DIR);
-        if (!tex.empty())
-            g_si.SetStringValue("Folders", "Textures", tex.c_str());
-    }
-
     // Slot{1,2}_Enable are now owned by CoreOptions::MemoryCards::ApplyDefaults
     // (called from the per-call user-options block below) so dialog tweaks
     // take effect on the next retro_load_game. Filenames stay hardcoded
@@ -355,6 +338,34 @@ void InitializeDefaults(const std::string& system_dir,
 
         g_initialized = true;
     }  // end of one-shot init block
+
+    // Path-override layer: if the host advertises the new env enums
+    // (RetroNest does; RetroArch / other hosts don't), the user's chosen
+    // dir replaces the save_dir-derived default set inside the one-shot
+    // block above. Runs every retro_load_game so a user who changes the
+    // path override in the RetroNest UI sees it applied on the next launch
+    // without restarting the host process. The env callback lives on the
+    // singleton FrontendState set in retro_set_environment; on hosts that
+    // don't implement these enums, QueryPathOverride returns empty and
+    // g_si retains the save_dir-derived value from the one-shot block.
+    {
+        retro_environment_t cb = g_frontend.environ_cb;  // from LibretroFrontend.h
+        const std::string mc = QueryPathOverride(cb, RETRONEST_ENVIRONMENT_GET_MEMCARDS_DIR);
+        if (!mc.empty())
+        {
+            g_si.SetStringValue("Folders", "MemoryCards", mc.c_str());
+            FrontendLog(RETRO_LOG_INFO,
+                "[PathOverrides] MemoryCards override applied: %s", mc.c_str());
+        }
+
+        const std::string tex = QueryPathOverride(cb, RETRONEST_ENVIRONMENT_GET_TEXTURES_DIR);
+        if (!tex.empty())
+        {
+            g_si.SetStringValue("Folders", "Textures", tex.c_str());
+            FrontendLog(RETRO_LOG_INFO,
+                "[PathOverrides] Textures override applied: %s", tex.c_str());
+        }
+    }
 
     // SP7c Phase 1 followup: user-resolvable Emulation knobs re-apply on
     // every retro_load_game so dialog tweaks take effect on the next
