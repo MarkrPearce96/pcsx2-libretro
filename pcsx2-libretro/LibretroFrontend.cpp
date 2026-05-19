@@ -669,4 +669,33 @@ RETRO_API unsigned retro_get_region(void) { return g_detected_region; }
 RETRO_API void* retro_get_memory_data(unsigned) { return nullptr; }
 RETRO_API size_t retro_get_memory_size(unsigned) { return 0; }
 
+// Host→core pause signal. Not part of libretro spec; RetroNest probes
+// for this symbol via dlsym and calls it when the in-game menu opens
+// (PCSX2's EE/MTGS/MTVU threads are decoupled from retro_run, so
+// pausing the frame pump alone isn't enough — the host needs an
+// explicit way to halt internal emulation threads).
+//
+// Implementation delegates to the SP6.5 save-state pause-handshake
+// helpers in LibretroSaveState.h, which already handle idempotency
+// and the 200 ms VMState polling deadline correctly.
+//
+// Thread expectations: called from the RetroNest GUI thread (Qt slot
+// fired by AppController::openLibretroOverlayMenu →
+// GameSession::pauseEmulation). s_prev_state is a function-local
+// static touched only from that thread.
+RETRO_API void retronest_set_paused(bool paused);
+void retronest_set_paused(bool paused)
+{
+    static VMState s_prev_state = VMState::Shutdown;
+    if (paused)
+    {
+        s_prev_state = Pcsx2Libretro::WaitForVmPaused();
+    }
+    else
+    {
+        Pcsx2Libretro::ResumeVm(s_prev_state);
+        s_prev_state = VMState::Shutdown;
+    }
+}
+
 } // extern "C"
