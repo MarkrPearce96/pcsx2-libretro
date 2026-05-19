@@ -104,8 +104,27 @@ if("${CMAKE_HOST_SYSTEM_PROCESSOR}" STREQUAL "x86_64" OR "${CMAKE_HOST_SYSTEM_PR
 		if (DISABLE_ADVANCE_SIMD)
 			add_compile_options("-msse" "-msse2" "-msse4.1" "-mfxsr")
 		else()
-			# Can't use march=native on Apple Silicon.
-			if(NOT APPLE OR "${CMAKE_HOST_SYSTEM_PROCESSOR}" STREQUAL "x86_64")
+			# Can't use march=native on Apple Silicon — clang resolves it
+			# to -mcpu=apple-mX at compile time, which the x86_64 backend
+			# rejects (e.g. "unknown target CPU 'apple-m4'"). Probing
+			# CMAKE_HOST_SYSTEM_PROCESSOR is unreliable here: when cmake
+			# configure runs from a Rosetta shell, it sees x86_64 even
+			# though the physical CPU is arm64 — so use sysctl on macOS
+			# to read hw.optional.arm64 directly.
+			set(_SKIP_MARCH_NATIVE FALSE)
+			if(APPLE)
+				execute_process(
+					COMMAND sysctl -n hw.optional.arm64
+					OUTPUT_VARIABLE _APPLE_HW_ARM64
+					OUTPUT_STRIP_TRAILING_WHITESPACE
+					ERROR_QUIET)
+				if(_APPLE_HW_ARM64 STREQUAL "1")
+					set(_SKIP_MARCH_NATIVE TRUE)
+				endif()
+			elseif(NOT "${CMAKE_HOST_SYSTEM_PROCESSOR}" STREQUAL "x86_64")
+				set(_SKIP_MARCH_NATIVE TRUE)
+			endif()
+			if(NOT _SKIP_MARCH_NATIVE)
 				add_compile_options("-march=native")
 			endif()
 		endif()
