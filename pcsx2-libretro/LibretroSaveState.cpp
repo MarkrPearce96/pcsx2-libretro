@@ -22,12 +22,15 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <string>
 #include <thread>
 #include <vector>
+
+#include <unistd.h>             // truncate
 
 namespace Pcsx2Libretro
 {
@@ -40,6 +43,77 @@ namespace
 // frontend should retry on next call". Reset in
 // ResetSerializeSizeCache() (called from retro_unload_game).
 std::atomic<size_t> g_serialize_size{0};
+
+// Tail sentinel: the last 16 bytes of a padded save-state buffer are
+// 8 bytes of magic followed by little-endian uint64_t actual_zip_size.
+// Lets readers know where the real zip ends so the trailing zero pad
+// can be trimmed before libzip is asked to parse the buffer/file.
+constexpr char     kPadMagic[8]  = {'P','C','S','X','S','I','Z','E'};
+constexpr size_t   kSentinelSize = sizeof(kPadMagic) + sizeof(uint64_t);
+
+void WriteSentinel(uint8_t* dst, size_t len, uint64_t actual_zip_size)
+{
+    if (len < kSentinelSize) return;
+    std::memcpy(dst + len - kSentinelSize, kPadMagic, sizeof(kPadMagic));
+    std::memcpy(dst + len - sizeof(uint64_t), &actual_zip_size,
+                sizeof(actual_zip_size));
+}
+
+bool TryReadSentinel(const uint8_t* src, size_t len, uint64_t* out)
+{
+    if (len < kSentinelSize) return false;
+    if (std::memcmp(src + len - kSentinelSize, kPadMagic,
+                    sizeof(kPadMagic)) != 0)
+        return false;
+    uint64_t stored = 0;
+    std::memcpy(&stored, src + len - sizeof(uint64_t), sizeof(stored));
+    if (stored == 0 || stored > len - kSentinelSize) return false;
+    *out = stored;
+    return true;
+}
+
+// Backward-scan for the ZIP End-Of-Central-Directory signature
+// (0x06054b50). Returns the offset just past the EOCD record
+// (including its comment) — i.e. the true end of the zip blob —
+// or 0 if not found / not validated.
+//
+// Used as a fallback when the tail sentinel is absent (e.g. files
+// written by an earlier build that padded with zeros but didn't
+// emit a sentinel). The scan walks the whole buffer because we
+// don't know how large the pad is.
+size_t FindZipEnd(const uint8_t* buf, size_t len)
+{
+    constexpr uint32_t kEocdSig = 0x06054b50;
+    if (len < 22) return 0;
+    size_t off = len - 22;
+    while (true)
+    {
+        const uint32_t sig =
+            uint32_t(buf[off])           |
+            uint32_t(buf[off + 1]) <<  8 |
+            uint32_t(buf[off + 2]) << 16 |
+            uint32_t(buf[off + 3]) << 24;
+        if (sig == kEocdSig)
+        {
+            const uint16_t comment_len =
+                uint16_t(buf[off + 20]) |
+                uint16_t(buf[off + 21]) << 8;
+            const size_t end = off + 22 + size_t(comment_len);
+            // Sanity: the central-dir-offset field should point inside the
+            // buffer too. (Bytes [off+16..off+20], little-endian uint32.)
+            const uint32_t cd_off =
+                uint32_t(buf[off + 16])       |
+                uint32_t(buf[off + 17]) <<  8 |
+                uint32_t(buf[off + 18]) << 16 |
+                uint32_t(buf[off + 19]) << 24;
+            if (end <= len && cd_off < off)
+                return end;
+        }
+        if (off == 0) break;
+        --off;
+    }
+    return 0;
+}
 
 // RETRONEST_STATE_TRACE: env-gated tracing. Zero overhead when unset.
 // Same pattern as IsStateTraceEnabled() in LibretroFrontend.cpp
@@ -388,13 +462,17 @@ void ResetSerializeSizeCache()
 
 size_t SerializeSize()
 {
-    // Probe-once: build a scratch zip, cache its size, return that
-    // constant forever for this game. Returns 0 pre-Running so the
-    // frontend retries on the next call (spec-legal).
-    //
-    // Deterministic by construction: every entry is ZIP_CM_STORE, so
-    // output size = sum(entry_bytes) + sum(local_file_headers) +
-    // central_directory + EOCD — fixed per (build, game).
+    // Probe + headroom pad. The probe is NOT byte-stable across the VM's
+    // execution: at least one PCSX2 component's freeze output (suspected
+    // GS surface cache / VU dynamic state) grows by tens-to-hundreds of
+    // kilobytes between calls. Observed live on Looney Tunes Space Race
+    // PAL — probe=48,361,703, actual serialize=48,543,463 (+178 KB), with
+    // Serialize() refusing to overflow the caller buffer and the on-disk
+    // zip ending up truncated/corrupt. Padding the reported size gives
+    // headroom; the tail is zero-filled in Serialize() and the zip format
+    // tolerates trailing zeros (EOCD self-locates).
+    constexpr size_t kSerializeHeadroomBytes = 8 * 1024 * 1024;
+
     const size_t cached = g_serialize_size.load();
     if (cached != 0) return cached;
     if (!VMManager::HasValidVM()) return 0;
@@ -421,14 +499,15 @@ size_t SerializeSize()
     ResumeVm(prev);
 
     if (probed == 0) return 0;
-    g_serialize_size.store(probed);
+    const size_t reported = probed + kSerializeHeadroomBytes;
+    g_serialize_size.store(reported);
 
     const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now() - t0).count();
     FrontendLog(RETRO_LOG_INFO,
-        "SerializeSize: probed=%zu bytes in %lldms (cached)",
-        probed, static_cast<long long>(elapsed));
-    return probed;
+        "SerializeSize: probed=%zu bytes (+%zu pad = %zu reported) in %lldms (cached)",
+        probed, kSerializeHeadroomBytes, reported, static_cast<long long>(elapsed));
+    return reported;
 }
 
 bool Serialize(void* dst, size_t len)
@@ -476,6 +555,10 @@ bool Serialize(void* dst, size_t len)
                 {
                     std::memset(static_cast<u8*>(dst) + sink.bytes.size(), 0,
                                 len - sink.bytes.size());
+                    // Tail sentinel lets readers (Unserialize and the cold-
+                    // boot file-trim helper) recover the real zip end from
+                    // a padded buffer/file. See WriteSentinel comment above.
+                    WriteSentinel(static_cast<u8*>(dst), len, sink.bytes.size());
                 }
                 ok = true;
             }
@@ -506,8 +589,29 @@ bool Unserialize(const void* src, size_t len)
     const VMState prev = WaitForVmPaused();
     if (prev == VMState::Shutdown) return false;
 
+    // Sentinel-aware trim: if the buffer was produced by our padded
+    // Serialize path, strip the trailing zeros + sentinel before
+    // handing it to libzip (which can't otherwise locate the EOCD).
+    // Fall back to backward EOCD scan for files written by earlier
+    // builds that padded without a sentinel.
+    size_t effective_len = len;
+    {
+        uint64_t sentinel_size = 0;
+        if (TryReadSentinel(static_cast<const uint8_t*>(src), len,
+                            &sentinel_size))
+        {
+            effective_len = size_t(sentinel_size);
+        }
+        else
+        {
+            const size_t scanned =
+                FindZipEnd(static_cast<const uint8_t*>(src), len);
+            if (scanned != 0 && scanned < len) effective_len = scanned;
+        }
+    }
+
     Error err;
-    const bool ok = SaveState_UnzipFromMemory(src, len, &err);
+    const bool ok = SaveState_UnzipFromMemory(src, effective_len, &err);
     if (!ok)
     {
         // SaveState_UnzipFromZip already calls VMManager::Reset() on
@@ -527,6 +631,64 @@ bool Unserialize(const void* src, size_t len)
             ok ? 1 : 0, static_cast<long long>(elapsed));
     }
     return ok;
+}
+
+bool TrimPaddedSaveStateFile(const char* path)
+{
+    if (!path || !*path) return false;
+
+    std::FILE* fp = std::fopen(path, "rb");
+    if (!fp) return false;
+    if (std::fseek(fp, 0, SEEK_END) != 0) { std::fclose(fp); return false; }
+    const long file_size_raw = std::ftell(fp);
+    if (file_size_raw <= long(kSentinelSize)) { std::fclose(fp); return false; }
+    const size_t file_size = size_t(file_size_raw);
+
+    size_t trim_to = 0;
+
+    // Try sentinel first (faster, exact). TryReadSentinel's own bound
+    // check is relative to its window, so revalidate against file_size.
+    if (std::fseek(fp, long(file_size - kSentinelSize), SEEK_SET) == 0)
+    {
+        uint8_t tail[kSentinelSize];
+        if (std::fread(tail, 1, kSentinelSize, fp) == kSentinelSize &&
+            std::memcmp(tail, kPadMagic, sizeof(kPadMagic)) == 0)
+        {
+            uint64_t stored = 0;
+            std::memcpy(&stored, tail + sizeof(kPadMagic), sizeof(stored));
+            if (stored > 0 && stored < file_size) trim_to = size_t(stored);
+        }
+    }
+
+    // Fallback: backward EOCD scan over the full file. Only kicks in for
+    // files written by earlier builds that padded without a sentinel.
+    if (trim_to == 0)
+    {
+        // Cap fallback to a sane ceiling so we don't slurp a bogus
+        // multi-gigabyte file into memory. Real PCSX2 save states are
+        // ~50 MB plus our 8 MB pad, so 256 MB is generous headroom.
+        constexpr size_t kMaxScanBytes = 256 * 1024 * 1024;
+        if (file_size > kMaxScanBytes) { std::fclose(fp); return false; }
+        std::unique_ptr<uint8_t[]> buf(new(std::nothrow) uint8_t[file_size]);
+        if (!buf) { std::fclose(fp); return false; }
+        if (std::fseek(fp, 0, SEEK_SET) != 0) { std::fclose(fp); return false; }
+        if (std::fread(buf.get(), 1, file_size, fp) != file_size)
+        {
+            std::fclose(fp); return false;
+        }
+        const size_t scanned = FindZipEnd(buf.get(), file_size);
+        if (scanned != 0 && scanned < file_size) trim_to = scanned;
+    }
+
+    std::fclose(fp);
+
+    if (trim_to == 0) return false;
+    if (::truncate(path, off_t(trim_to)) != 0) return false;
+
+    FrontendLog(RETRO_LOG_INFO,
+        "TrimPaddedSaveStateFile: %s trimmed %zu -> %zu bytes",
+        path, file_size, trim_to);
+    return true;
 }
 
 } // namespace Pcsx2Libretro

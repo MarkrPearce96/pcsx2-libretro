@@ -607,6 +607,15 @@ RETRO_API bool retro_load_game(const struct retro_game_info* game)
             FrontendLog(RETRO_LOG_INFO,
                 "retro_load_game: cold-boot via save state %s",
                 params.save_state.c_str());
+
+            // The .resume file on disk is the padded buffer that
+            // retro_serialize handed the frontend — real_zip ||
+            // zeros || sentinel. Trim it in place so PCSX2's
+            // upstream file-based loader (which uses libzip's
+            // EOCD scan, capped at ~64 KB back from EOF) can
+            // actually open it. See LibretroSaveState.cpp.
+            Pcsx2Libretro::TrimPaddedSaveStateFile(
+                params.save_state.c_str());
         }
     }
 
