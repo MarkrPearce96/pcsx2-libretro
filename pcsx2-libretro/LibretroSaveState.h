@@ -56,4 +56,22 @@ size_t SerializeSize();
 bool   Serialize(void* dst, size_t len);
 bool   Unserialize(const void* src, size_t len);
 
+// SerializeSize reports a padded length to give Serialize headroom
+// for cross-call PCSX2 state-size variance (probe-vs-serialize
+// delta of up to a few MB observed on some titles, e.g. Looney Tunes
+// Space Race PAL). The buffer Serialize fills is [real_zip || zeros
+// || sentinel(magic+size)] — the trailing zeros prevent libzip from
+// finding the EOCD when the saved buffer is written to disk and
+// later read by the cold-boot resume path.
+//
+// TrimPaddedSaveStateFile rewrites the file in place to strip the
+// pad, leaving a strict prefix that's a valid zip. Tries the
+// sentinel first; falls back to backward-scanning for the zip EOCD
+// signature so files written by earlier builds (pad without
+// sentinel) also self-heal.
+//
+// Returns true if the file was trimmed, false if it was already
+// the right size or didn't look padded.
+bool TrimPaddedSaveStateFile(const char* path);
+
 } // namespace Pcsx2Libretro
