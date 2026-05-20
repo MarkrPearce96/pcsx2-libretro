@@ -16,6 +16,7 @@
 
 #include "pcsx2/GS.h"
 #include "pcsx2/VMManager.h"
+#include "pcsx2/Config.h"           // LimiterModeType
 #include "MemoryTypes.h"   // eeMem, Ps2MemSize::MainRam
 #include "CoreResources.h"
 #include "CoreOptions.h"
@@ -722,6 +723,26 @@ RETRO_API void retronest_set_paused(bool paused)
         // Running transition).
         Pcsx2Libretro::GetEmuThread().SetHostInitiatedPause(false);
     }
+}
+
+// Host-side fast-forward toggle, mirroring retronest_set_paused.
+//
+// PCSX2 doesn't speed up just because retro_run is called more often:
+// the EmuThread paces itself internally to the target VSync rate via
+// g_present_cv, so the libretro-standard "frontend calls retro_run
+// faster" approach (which mGBA and other synchronous cores honor) is
+// a no-op for us. To actually fast-forward we have to disengage the
+// in-VM framelimiter — which is what LimiterModeType::Turbo does (it
+// switches the target speed to TurboScalar; configurable via the
+// pcsx2_fast_forward_speed core option, default 2.0×).
+//
+// RetroNest probes this symbol via dlsym; cores that don't export it
+// (mGBA, etc.) get their existing libretro-standard FF path unchanged.
+RETRO_API void retronest_set_fast_forward(bool fast_forward)
+{
+    if (!VMManager::HasValidVM()) return;
+    VMManager::SetLimiterMode(fast_forward ? LimiterModeType::Turbo
+                                           : LimiterModeType::Nominal);
 }
 
 } // extern "C"
