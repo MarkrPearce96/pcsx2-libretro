@@ -14,6 +14,7 @@
 #include "pcsx2/VMManager.h"
 
 #include "libretro.h"
+#include "CoreResources.h"
 
 #include <chrono>
 #include <thread>
@@ -23,8 +24,6 @@ namespace Pcsx2Libretro
 
 namespace
 {
-    constexpr auto INIT_TIMEOUT = std::chrono::seconds(30);
-
     EmuThread g_emu_thread;
 }
 
@@ -70,10 +69,11 @@ bool EmuThread::Start(const VMBootParameters& boot_params)
 
     // Wait for init handshake.
     std::unique_lock<std::mutex> lk(m_init_mutex);
-    if (!m_init_cv.wait_for(lk, INIT_TIMEOUT, [this] { return m_init_done.load(); }))
+    if (!m_init_cv.wait_for(lk, CoreResources::kVmInitTimeout,
+                             [this] { return m_init_done.load(); }))
     {
         FrontendLog(RETRO_LOG_ERROR, "EmuThread: VM init timed out after %llds",
-                    static_cast<long long>(INIT_TIMEOUT.count()));
+                    static_cast<long long>(CoreResources::kVmInitTimeout.count()));
         // Thread is still running but we couldn't confirm init — request stop
         // via the safe flag path and join to clean up. (Same cross-thread
         // SetState concerns as RequestShutdown apply here.)
@@ -241,7 +241,7 @@ void EmuThread::ThreadFunc(VMBootParameters params)
     MTGS::WaitGS();
     if (THREAD_VU1)
         vu1Thread.WaitVU();
-    std::this_thread::sleep_for(std::chrono::milliseconds(150));
+    std::this_thread::sleep_for(CoreResources::kPostInitSettle);
 
     m_init_success.store(true);
     m_init_done.store(true);
@@ -306,10 +306,11 @@ void EmuThread::ThreadFunc(VMBootParameters params)
     // bad-state resume file remains on disk but at least they're not
     // stuck staring at a frozen frame.
     //
-    // The 500ms threshold is comfortably longer than SP6.5's
-    // WaitForVmPaused handshake (typically <16ms) plus the work window
-    // for in-flight save-state probes (~50-200ms), so we don't false-
-    // trigger on legitimate pause/resume cycles.
+    // The kFatalPauseWarnAt (500 ms) threshold is comfortably longer than
+    // SP6.5's WaitForVmPaused handshake (typically <16ms) plus the work
+    // window for in-flight save-state probes (~50-200ms), so we don't
+    // false-trigger on legitimate pause/resume cycles. See
+    // CoreResources.h for the value + sibling kFatalPauseShutdownAt.
     using clock = std::chrono::steady_clock;
     auto paused_since = clock::time_point{};
     bool fatal_pause_logged = false;
@@ -336,28 +337,30 @@ void EmuThread::ThreadFunc(VMBootParameters params)
                 continue;
             }
             // Internal SetPaused(true) — e.g. R5900 exception / TLB miss.
-            // 500ms warn + 1000ms force-shutdown as before.
+            // Warn at kFatalPauseWarnAt, force shutdown at
+            // kFatalPauseShutdownAt (both defined in CoreResources.h).
             if (paused_since == clock::time_point{})
                 paused_since = clock::now();
-            const auto paused_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                clock::now() - paused_since).count();
-            if (!fatal_pause_logged && paused_ms >= 500)
+            const auto paused_for = std::chrono::duration_cast<std::chrono::milliseconds>(
+                clock::now() - paused_since);
+            if (!fatal_pause_logged && paused_for >= CoreResources::kFatalPauseWarnAt)
             {
                 FrontendLog(RETRO_LOG_ERROR,
-                    "EmuThread: VM paused for >=500ms without shutdown — "
+                    "EmuThread: VM paused for >=%lldms without shutdown — "
                     "a PCSX2 internal code path called SetPaused(true) "
                     "(check for a preceding R5900 Exception / TLB miss / "
                     "Bus Error log line). Terminating libretro session "
                     "rather than freezing forever; user returns to "
-                    "RetroNest menu.");
+                    "RetroNest menu.",
+                    static_cast<long long>(CoreResources::kFatalPauseWarnAt.count()));
                 fatal_pause_logged = true;
             }
-            if (paused_ms >= 1000)
+            if (paused_for >= CoreResources::kFatalPauseShutdownAt)
             {
                 FrontendLog(RETRO_LOG_WARN,
                     "EmuThread: requesting shutdown after %lldms of "
                     "unexpected Paused state.",
-                    static_cast<long long>(paused_ms));
+                    static_cast<long long>(paused_for.count()));
                 m_stop_requested.store(true, std::memory_order_release);
                 // Next loop iteration takes the m_stop_requested branch
                 // above and exits cleanly via SetState(Stopping).
