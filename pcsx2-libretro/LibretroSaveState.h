@@ -28,12 +28,13 @@ namespace Pcsx2Libretro
 // can restore it (we don't want to leave a Paused VM Running, or
 // vice-versa).
 //
-// Polls in 1 ms increments up to a 200 ms ceiling. PCSX2-Qt uses the
-// same handshake for its "save state while running" UI; the EE
-// thread reaches the next event-test typically within a single
-// frame (~16 ms). 200 ms catches a deeply stalled MTGS or recompiler
-// edge case without locking the host indefinitely — on timeout we
-// log a WARN and return VMState::Shutdown so the caller can bail.
+// Polls in 1 ms increments up to CoreResources::kWaitPausedDeadline
+// (200 ms). PCSX2-Qt uses the same handshake for its "save state
+// while running" UI; the EE thread reaches the next event-test
+// typically within a single frame (~16 ms). The 200 ms ceiling
+// catches a deeply stalled MTGS or recompiler edge case without
+// locking the host indefinitely — on timeout we log a WARN and
+// return VMState::Shutdown so the caller can bail.
 //
 // Caller must call ResumeVm(prev_state) regardless of whether the
 // serialize succeeded.

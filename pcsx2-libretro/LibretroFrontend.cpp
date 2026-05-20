@@ -17,6 +17,7 @@
 #include "pcsx2/GS.h"
 #include "pcsx2/VMManager.h"
 #include "pcsx2/Config.h"           // LimiterModeType
+#include "pcsx2/SPU2/spu2.h"        // SPU2::GetConsoleSampleRate
 #include "MemoryTypes.h"   // eeMem, Ps2MemSize::MainRam
 #include "CoreResources.h"
 #include "CoreOptions.h"
@@ -320,13 +321,27 @@ RETRO_API void retro_get_system_av_info(struct retro_system_av_info* info)
 {
     if (!info) return;
     std::memset(info, 0, sizeof(*info));
-    info->geometry.base_width   = 640;
-    info->geometry.base_height  = 448;
-    info->geometry.max_width    = 1280;
-    info->geometry.max_height   = 1024;
+    // Native PS2 framebuffer dimensions, region-aware. Width is fixed at
+    // 640; height tracks g_detected_region (NTSC=448, PAL=512). Re-emitted
+    // via SET_SYSTEM_AV_INFO when region refinement runs in retro_run, so
+    // the host's base-geometry view stays consistent with the actual video
+    // mode after gsVideoMode resolves.
+    namespace CR = Pcsx2Libretro::CoreResources;
+    info->geometry.base_width   = CR::kPs2NativeWidth;
+    info->geometry.base_height  = (g_detected_region == RETRO_REGION_PAL)
+        ? CR::kPs2NativeHeightPal
+        : CR::kPs2NativeHeightNtsc;
+    // Max = PAL native × 8x upscale cap. PAL height is used unconditionally
+    // (576 > 480) because libretro does not allow max_* to grow after init,
+    // so the worst-case region must be baked in from the first call.
+    info->geometry.max_width    = CR::kPs2NativeWidth      * CR::kMaxUpscaleMultiplier;
+    info->geometry.max_height   = CR::kPs2NativeHeightPal  * CR::kMaxUpscaleMultiplier;
     info->geometry.aspect_ratio = AspectRatio::Compute();
     info->timing.fps            = g_detected_fps;
-    info->timing.sample_rate    = 48000.0;
+    // Query PCSX2's SPU2 for the actual console sample rate. Returns 48000
+    // for PS2 mode, 44100 for PSX mode. Safe to call before VM init —
+    // reads a static flag that defaults to PS2 mode.
+    info->timing.sample_rate    = static_cast<double>(SPU2::GetConsoleSampleRate());
 
     if (std::getenv("RETRONEST_AUDIO_TRACE"))
     {
@@ -470,11 +485,11 @@ RETRO_API void retro_run(void)
     // as soon as a frame is ready, so the host (RetroArch / RetroNest)
     // drives ~60Hz cadence by calling us once per host frame.
     //
-    // 100 ms timeout protects against VM hangs / Initialize-failed paths
-    // where Frame would never be signalled.
-    using namespace std::chrono_literals;
+    // CoreResources::kFrameWaitTimeout (100 ms) protects against VM hangs /
+    // Initialize-failed paths where Frame would never be signalled.
     std::unique_lock<std::mutex> lock(g_present_mutex);
-    g_present_cv.wait_for(lock, 100ms, [] { return g_present_ready.load(); });
+    g_present_cv.wait_for(lock, CoreResources::kFrameWaitTimeout,
+                          [] { return g_present_ready.load(); });
     g_present_ready.store(false, std::memory_order_release);
     lock.unlock(); // release before draining; drain doesn't touch g_present_*
 
@@ -501,12 +516,14 @@ RETRO_API void retro_run(void)
             // exact rate. Steady state: ring buffer stays small, SDL queue
             // stays bounded near zero, audio stays in sync with video.
             //
-            // 800 = av.timing.sample_rate / av.timing.fps. Both are currently
-            // hardcoded in retro_get_system_av_info; once that derives fps
-            // from the GS region (SP4.x M4), this should derive too.
-            // MAX_FRAMES_PER_DRAIN still bounds the pending-buffer staging
-            // size — only the per-call drain target changes.
-            constexpr u32 frames_per_host_frame = 48000 / 60;
+            // frames_per_host_frame = sample_rate / fps. Both are now derived
+            // from native PCSX2 state (SPU2::GetConsoleSampleRate + region-
+            // refined g_detected_fps), so PSX-mode (44100) and PAL (50 Hz)
+            // cases self-adjust. lround keeps the truncation error from
+            // tilting consistently below target. MAX_FRAMES_PER_DRAIN still
+            // bounds the pending-buffer staging size.
+            const u32 frames_per_host_frame = static_cast<u32>(std::lround(
+                static_cast<double>(SPU2::GetConsoleSampleRate()) / g_detected_fps));
             stream->DrainToLibretroCallback(g_frontend.audio_batch_cb,
                 frames_per_host_frame);
         }

@@ -10,6 +10,7 @@
 
 #include "LibretroSaveState.h"
 #include "LibretroFrontend.h"   // FrontendLog, g_frontend
+#include "CoreResources.h"      // kWaitPausedDeadline, kPostInitSettle
 
 #include "pcsx2/VMManager.h"
 #include "pcsx2/SaveState.h"    // SaveState_DownloadState, ArchiveEntryList, SaveState_UnzipFromMemory
@@ -422,7 +423,7 @@ VMState WaitForVmPaused()
     }
     VMManager::SetPaused(true);
     const auto start = std::chrono::steady_clock::now();
-    const auto deadline = start + 200ms;
+    const auto deadline = start + CoreResources::kWaitPausedDeadline;
     while (std::chrono::steady_clock::now() < deadline)
     {
         const VMState s = VMManager::GetState();
@@ -441,7 +442,8 @@ VMState WaitForVmPaused()
         std::this_thread::sleep_for(1ms);
     }
     FrontendLog(RETRO_LOG_WARN,
-        "WaitForVmPaused: 200 ms deadline exceeded — VMState=%d",
+        "WaitForVmPaused: %lld ms deadline exceeded — VMState=%d",
+        static_cast<long long>(CoreResources::kWaitPausedDeadline.count()),
         static_cast<int>(VMManager::GetState()));
     return VMState::Shutdown;  // bail
 }
@@ -534,7 +536,7 @@ bool Serialize(void* dst, size_t len)
     MTGS::WaitGS();
     if (THREAD_VU1)
         vu1Thread.WaitVU();
-    std::this_thread::sleep_for(std::chrono::milliseconds(150));
+    std::this_thread::sleep_for(CoreResources::kPostInitSettle);
 
     bool ok = false;
     {
