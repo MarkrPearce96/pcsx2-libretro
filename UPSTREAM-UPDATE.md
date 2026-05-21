@@ -54,8 +54,10 @@ Never edit upstream files outside the single 4-line block in top-level
 All RetroNest-specific code lives in `pcsx2-libretro/` (a new sibling
 directory, not an edit to upstream). There are two narrow exceptions
 already in place for libretro-specific dispatch tables (audio backend +
-input source enums), each comment-flagged `// pcsx2-libretro… (SPN)` for
-future rebase reviewers — do not widen these.
+input source enums), each comment-flagged `// pcsx2-libretro… (SP4)` / `(SP5)`
+(grep for `pcsx2-libretro` in `pcsx2/Host/AudioStream*` and
+`pcsx2/Input/InputManager.{h,cpp}`) for future rebase reviewers —
+do not widen these.
 
 ## What can go wrong on rebase
 
