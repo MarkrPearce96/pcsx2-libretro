@@ -1,0 +1,160 @@
+name: libretro_release
+
+# Builds the pcsx2-libretro core on tag push and publishes a GitHub Release
+# with the macOS x86_64 dylib + resources packaged as a single zip.
+#
+# Spec: see RetroNest-Project/docs/superpowers/specs/2026-05-21-pcsx2-libretro-github-publishing-design.md
+# Process: see UPSTREAM-UPDATE.md at the repo root.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write  # required for softprops/action-gh-release to create releases
+
+jobs:
+  build:
+    name: Build macOS x86_64
+    # macos-13 = Intel runner. When GitHub retires macos-13, switch to macos-14
+    # with Rosetta + the x86_64 brew dance documented in UPSTREAM-UPDATE.md.
+    runs-on: macos-13
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0  # full history so the release job can read SHAs
+
+      - name: Install Homebrew dependencies
+        run: |
+          brew update
+          brew install \
+            cmake \
+            ninja \
+            libpng \
+            libjpeg \
+            libzip \
+            zstd \
+            qt@6 \
+            sdl3 \
+            shaderc \
+            rapidyaml \
+            plutosvg \
+            plutovg \
+            molten-vk \
+            lz4
+
+      - name: Configure (cmake)
+        run: |
+          cmake -S . -B build \
+            -DENABLE_LIBRETRO=ON \
+            -DENABLE_QT_UI=OFF \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_ARCHITECTURES=x86_64
+
+      - name: Build pcsx2_libretro target
+        run: cmake --build build --target pcsx2_libretro -j
+
+      - name: Upload dylib artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pcsx2_libretro-dylib
+          path: build/pcsx2-libretro/pcsx2_libretro.dylib
+          if-no-files-found: error
+
+      - name: Upload resources artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pcsx2_libretro-resources
+          path: bin/resources/
+          if-no-files-found: error
+
+  release:
+    name: Package and publish release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (for SHA lookup)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download dylib artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: pcsx2_libretro-dylib
+          path: stage/
+
+      - name: Download resources artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: pcsx2_libretro-resources
+          path: stage/pcsx2_libretro_resources/
+
+      - name: Fetch upstream master (for SHA lookup)
+        run: |
+          git remote add upstream https://github.com/PCSX2/pcsx2.git
+          git fetch upstream master --depth=200
+
+      - name: Compute version metadata
+        id: meta
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          FORK_SHA="$(git rev-parse HEAD)"
+          # upstream_sha: the merge-base of HEAD and upstream/master is the
+          # upstream tip we last rebased onto (after a clean rebase, all of
+          # upstream/master is reachable from HEAD, so merge-base returns
+          # upstream/master's tip).
+          UPSTREAM_SHA="$(git merge-base HEAD upstream/master)"
+          UPSTREAM_SHORT="$(echo "$UPSTREAM_SHA" | cut -c1-7)"
+          BUILD_DATE="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          {
+            echo "tag=$TAG"
+            echo "platform=macos-x86_64"
+            echo "fork_sha=$FORK_SHA"
+            echo "upstream_sha=$UPSTREAM_SHA"
+            echo "upstream_ref=upstream/master"
+            echo "build_date=$BUILD_DATE"
+          } > stage/VERSION
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "upstream_short=$UPSTREAM_SHORT" >> "$GITHUB_OUTPUT"
+
+      - name: Verify staged contents
+        run: |
+          ls -la stage/
+          test -f stage/pcsx2_libretro.dylib
+          test -d stage/pcsx2_libretro_resources
+          test -f stage/VERSION
+          cat stage/VERSION
+
+      - name: Create zip
+        run: |
+          cd stage
+          zip -r ../pcsx2_libretro-macos-x86_64.zip \
+            pcsx2_libretro.dylib \
+            pcsx2_libretro_resources \
+            VERSION
+          cd ..
+          ls -la pcsx2_libretro-macos-x86_64.zip
+
+      - name: Compose release body
+        id: body
+        run: |
+          {
+            echo "**Platform:** macOS x86_64 (Intel + Apple Silicon via Rosetta)"
+            echo "**Upstream PCSX2:** ${{ steps.meta.outputs.upstream_short }} (master)"
+            echo ""
+            echo "## Changes since previous release"
+          } > release_body.md
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: ${{ steps.meta.outputs.tag }}
+          body_path: release_body.md
+          generate_release_notes: true   # appends auto-generated commit list below body
+          files: pcsx2_libretro-macos-x86_64.zip
+          fail_on_unmatched_files: true
