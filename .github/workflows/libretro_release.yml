@@ -20,12 +20,12 @@ jobs:
     # macos-13 = Intel runner. When GitHub retires macos-13, switch to macos-14
     # with Rosetta + the x86_64 brew dance documented in UPSTREAM-UPDATE.md.
     runs-on: macos-13
+    timeout-minutes: 90
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           submodules: recursive
-          fetch-depth: 0  # full history so the release job can read SHAs
 
       - name: Install Homebrew dependencies
         run: |
@@ -49,6 +49,7 @@ jobs:
       - name: Configure (cmake)
         run: |
           cmake -S . -B build \
+            -G Ninja \
             -DENABLE_LIBRETRO=ON \
             -DENABLE_QT_UI=OFF \
             -DCMAKE_BUILD_TYPE=Release \
@@ -96,7 +97,9 @@ jobs:
       - name: Fetch upstream master (for SHA lookup)
         run: |
           git remote add upstream https://github.com/PCSX2/pcsx2.git
-          git fetch upstream master --depth=200
+          # Full fetch so merge-base finds the real rebase point regardless of
+          # how far upstream has advanced since our last rebase.
+          git fetch upstream master
 
       - name: Compute version metadata
         id: meta
@@ -140,7 +143,6 @@ jobs:
           ls -la pcsx2_libretro-macos-x86_64.zip
 
       - name: Compose release body
-        id: body
         run: |
           {
             echo "**Platform:** macOS x86_64 (Intel + Apple Silicon via Rosetta)"
