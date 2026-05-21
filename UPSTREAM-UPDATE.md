@@ -49,15 +49,44 @@ If you need to cut a second release on the same day, suffix the tag with
 
 ## Discipline: keep the rebase surface tiny
 
-Never edit upstream files outside the single 4-line block in top-level
-`CMakeLists.txt` and the small fork-notice block at the top of `README.md`.
-All RetroNest-specific code lives in `pcsx2-libretro/` (a new sibling
-directory, not an edit to upstream). There are two narrow exceptions
-already in place for libretro-specific dispatch tables (audio backend +
-input source enums), each comment-flagged `// pcsx2-libretro… (SP4)` / `(SP5)`
-(grep for `pcsx2-libretro` in `pcsx2/Host/AudioStream*` and
-`pcsx2/Input/InputManager.{h,cpp}`) for future rebase reviewers —
-do not widen these.
+Never edit upstream **source** files outside the single 4-line block in
+top-level `CMakeLists.txt` and the small fork-notice block at the top of
+`README.md`. All RetroNest-specific code lives in `pcsx2-libretro/` (a
+new sibling directory, not an edit to upstream). There are two narrow
+exceptions already in place for libretro-specific dispatch tables (audio
+backend + input source enums), each comment-flagged
+`// pcsx2-libretro… (SP4)` / `(SP5)` (grep for `pcsx2-libretro` in
+`pcsx2/Host/AudioStream*` and `pcsx2/Input/InputManager.{h,cpp}`) for
+future rebase reviewers — do not widen these.
+
+### `.github/` is a wider exception
+
+Upstream PCSX2's CI configuration is deleted on our fork. CI files are
+not code — they're configuration meant for upstream's release pipeline.
+Keeping them just to satisfy the source-file discipline rule meant the
+fork's Actions tab fired noisy upstream workflows on every dependabot
+PR and competed with `libretro_release` for the shared macOS runner
+pool. Deleted on this fork:
+
+- All `.github/workflows/*.yml` except `libretro_release.yml`
+- `.github/workflows/scripts/` and `.github/workflows/architecture/`
+- `.github/dependabot.yml`
+- `.github/labeler.yml`
+
+Kept (harmless, fork-friendly): `.github/FUNDING.yml`,
+`.github/ISSUE_TEMPLATE/`, `.github/PULL_REQUEST_TEMPLATE.md`.
+
+When rebasing onto upstream master, expect upstream's workflows to come
+back via the rebase and need re-deleting. Quick recipe:
+
+```sh
+git ls-files .github/workflows/ \
+  | grep -v '^\.github/workflows/libretro_release\.yml$' \
+  | xargs -I{} git rm {} 2>/dev/null
+git rm -f .github/dependabot.yml .github/labeler.yml 2>/dev/null
+git rm -rf .github/workflows/scripts .github/workflows/architecture 2>/dev/null
+git commit -m "ci: drop upstream PCSX2 workflows reintroduced by rebase"
+```
 
 ## What can go wrong on rebase
 
