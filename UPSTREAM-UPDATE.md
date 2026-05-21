@@ -114,16 +114,19 @@ The workflow logs live at `https://github.com/<your-user>/pcsx2-libretro/actions
 
 **Most common failure:** missing brew dep. The fix is above.
 
-**Less common: macos-13 runner retirement.** GitHub will eventually retire
-the Intel `macos-13` runner image. When that happens:
+**Note: CI is already on macos-14 + Rosetta.** We migrated off `macos-13`
+on 2026-05-21 because GitHub's Intel runner pool became starved (30-90 min
+queue waits even with no other workflows competing). The workflow now uses
+`macos-14` (Apple Silicon), installs x86_64 Homebrew at `/usr/local`, and
+wraps cmake configure + build in `arch -x86_64` so the produced dylib is
+still x86_64. Apple Silicon runners dequeue in seconds. Per-build cost is
+~30 min slower due to Rosetta translation, but end-to-end time (queue +
+build) is meaningfully faster.
 
-- Change `runs-on: macos-13` to `runs-on: macos-14`
-- Wrap the cmake configure + build steps in an `arch -x86_64` invocation
-- Set up a parallel x86_64 Homebrew prefix under `/usr/local/` per the
-  user's local `setup-x86_64-toolchain.sh` (Rosetta required on the runner)
-
-This is the same recipe the local-build path uses today; it just isn't
-needed in CI as long as native Intel runners exist.
+If a future builds fails inside the `Install x86_64 Homebrew at /usr/local`
+or `Install Homebrew dependencies (x86_64)` steps, the official Homebrew
+installer's URL or the cask layout may have drifted. Check the Homebrew
+docs and update the install command in the workflow.
 
 **Tag race.** If two release tags are pushed within seconds of each other,
 the workflow's "previous release" lookup for the auto-generated commit

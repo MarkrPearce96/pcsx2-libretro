@@ -17,20 +17,36 @@ permissions:
 jobs:
   build:
     name: Build macOS x86_64
-    # macos-13 = Intel runner. When GitHub retires macos-13, switch to macos-14
-    # with Rosetta + the x86_64 brew dance documented in UPSTREAM-UPDATE.md.
-    runs-on: macos-13
-    timeout-minutes: 90
+    # macos-14 = Apple Silicon (arm64) with Rosetta. We use x86_64 Homebrew at
+    # /usr/local + arch -x86_64 wrappers so the final dylib is x86_64. Chosen
+    # over macos-13 because the Intel runner pool is starved (30-90 min queue
+    # waits); Apple Silicon runners dequeue in seconds.
+    runs-on: macos-14
+    timeout-minutes: 120  # +30 min vs macos-13 due to Rosetta translation cost
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      - name: Install Homebrew dependencies
+      - name: Install Rosetta
         run: |
-          brew update
-          brew install \
+          # Rosetta 2 is required to execute the x86_64 toolchain on arm64.
+          softwareupdate --install-rosetta --agree-to-license || true
+
+      - name: Install x86_64 Homebrew at /usr/local
+        run: |
+          if [ ! -x /usr/local/bin/brew ]; then
+            echo "Installing x86_64 Homebrew at /usr/local..."
+            NONINTERACTIVE=1 arch -x86_64 /bin/bash -c \
+              "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+          fi
+          arch -x86_64 /usr/local/bin/brew --version
+
+      - name: Install Homebrew dependencies (x86_64)
+        run: |
+          arch -x86_64 /usr/local/bin/brew update
+          arch -x86_64 /usr/local/bin/brew install \
             cmake \
             ninja \
             libpng \
@@ -46,17 +62,20 @@ jobs:
             molten-vk \
             lz4
 
-      - name: Configure (cmake)
+      - name: Configure (cmake under arch -x86_64)
         run: |
-          cmake -S . -B build \
+          # Point cmake at the x86_64 brew prefix so it finds the right libs.
+          # Use full path to x86_64 cmake to avoid PATH ambiguity with arm64 brew.
+          arch -x86_64 /usr/local/bin/cmake -S . -B build \
             -G Ninja \
+            -DCMAKE_PREFIX_PATH=/usr/local/opt/qt@6 \
             -DENABLE_LIBRETRO=ON \
             -DENABLE_QT_UI=OFF \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_OSX_ARCHITECTURES=x86_64
 
       - name: Build pcsx2_libretro target
-        run: cmake --build build --target pcsx2_libretro -j
+        run: arch -x86_64 /usr/local/bin/cmake --build build --target pcsx2_libretro -j
 
       - name: Upload dylib artifact
         uses: actions/upload-artifact@v4
