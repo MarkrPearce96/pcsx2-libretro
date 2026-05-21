@@ -90,18 +90,45 @@ jobs:
             PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin \
             /usr/local/bin/cmake --build build --target pcsx2_libretro -j
 
-      - name: Copy compiled Metal shader libraries into bin/resources/
+      - name: Compile Metal shader libraries into bin/resources/
         run: |
-          # PCSX2's pcsx2_resource() macro routes .metallib files into the
-          # main pcsx2-qt .app bundle's Contents/Resources/ via MACOSX_PACKAGE_LOCATION.
-          # The libretro target is a MODULE library, not a bundle, so the
-          # metallibs sit in build/pcsx2/ and never auto-deploy to bin/resources/.
-          # PCSX2's runtime fails GS device init without them ("Failed to create
-          # render device"). Copy them here so the upload-artifact step picks
-          # them up.
-          cp build/pcsx2/default.metallib bin/resources/
-          cp build/pcsx2/Metal22.metallib bin/resources/
-          cp build/pcsx2/Metal23.metallib bin/resources/
+          # The metallib custom-commands in pcsx2/CMakeLists.txt live inside
+          # setup_main_executable(), which is only called for the standalone
+          # pcsx2-qt target. Our libretro build (-DENABLE_QT_UI=OFF) never
+          # invokes that function, so the metallibs are never compiled. PCSX2
+          # at runtime needs default/Metal22/Metal23 .metallib files for GS
+          # device init or it fails with "Failed to create render device".
+          # We replicate the cmake recipe inline here so the upload step picks
+          # them up. xcrun metal/metallib are arch-independent (output is AIR
+          # bytecode + linked metallib), no need for arch -x86_64.
+          set -euo pipefail
+          SHADERS=(
+            pcsx2/GS/Renderers/Metal/cas.metal
+            pcsx2/GS/Renderers/Metal/convert.metal
+            pcsx2/GS/Renderers/Metal/present.metal
+            pcsx2/GS/Renderers/Metal/merge.metal
+            pcsx2/GS/Renderers/Metal/misc.metal
+            pcsx2/GS/Renderers/Metal/interlace.metal
+            pcsx2/GS/Renderers/Metal/tfx.metal
+            pcsx2/GS/Renderers/Metal/fxaa.metal
+          )
+          compile_metallib() {
+            local std="$1" triple="$2" outname="$3"
+            local airdir="build/metal-${outname}"
+            mkdir -p "$airdir"
+            local airfiles=()
+            for shader in "${SHADERS[@]}"; do
+              local base
+              base="$(basename "$shader" .metal)"
+              local out="$airdir/$base.air"
+              xcrun metal -ffast-math -std="$std" -target "$triple" -o "$out" -c "$shader"
+              airfiles+=("$out")
+            done
+            xcrun metallib -o "bin/resources/${outname}.metallib" "${airfiles[@]}"
+          }
+          compile_metallib macos-metal2.0 air64-apple-macos10.13 default
+          compile_metallib macos-metal2.2 air64-apple-macos10.15 Metal22
+          compile_metallib macos-metal2.3 air64-apple-macos11.0  Metal23
           ls -la bin/resources/*.metallib
 
       - name: Upload dylib artifact
