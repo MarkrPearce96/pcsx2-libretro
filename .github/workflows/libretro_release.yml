@@ -64,18 +64,31 @@ jobs:
 
       - name: Configure (cmake under arch -x86_64)
         run: |
-          # Point cmake at the x86_64 brew prefix so it finds the right libs.
-          # Use full path to x86_64 cmake to avoid PATH ambiguity with arm64 brew.
-          arch -x86_64 /usr/local/bin/cmake -S . -B build \
-            -G Ninja \
-            -DCMAKE_PREFIX_PATH=/usr/local/opt/qt@6 \
-            -DENABLE_LIBRETRO=ON \
-            -DENABLE_QT_UI=OFF \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_OSX_ARCHITECTURES=x86_64
+          # CRITICAL: scrub /opt/homebrew (arm64 brew) from CMake's search
+          # paths so it doesn't pick up arm64 libraries. Without this, the
+          # configure step succeeds but the linker fails with "symbol(s) not
+          # found for architecture x86_64" because libpng/libzip/etc were
+          # found at /opt/homebrew/lib (arm64).
+          arch -x86_64 env \
+            HOMEBREW_PREFIX=/usr/local \
+            HOMEBREW_CELLAR=/usr/local/Cellar \
+            HOMEBREW_REPOSITORY=/usr/local/Homebrew \
+            PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:/usr/local/share/pkgconfig \
+            PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin \
+            /usr/local/bin/cmake -S . -B build \
+              -G Ninja \
+              -DCMAKE_PREFIX_PATH="/usr/local;/usr/local/opt/qt@6" \
+              -DCMAKE_IGNORE_PATH=/opt/homebrew \
+              -DENABLE_LIBRETRO=ON \
+              -DENABLE_QT_UI=OFF \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DCMAKE_OSX_ARCHITECTURES=x86_64
 
       - name: Build pcsx2_libretro target
-        run: arch -x86_64 /usr/local/bin/cmake --build build --target pcsx2_libretro -j
+        run: |
+          arch -x86_64 env \
+            PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin \
+            /usr/local/bin/cmake --build build --target pcsx2_libretro -j
 
       - name: Upload dylib artifact
         uses: actions/upload-artifact@v4
