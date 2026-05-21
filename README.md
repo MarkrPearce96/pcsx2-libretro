@@ -1,3 +1,21 @@
+# pcsx2-libretro (RetroNest fork)
+
+> This is a fork of [PCSX2](https://github.com/PCSX2/pcsx2) that builds a
+> [libretro](https://www.libretro.com) core for use inside
+> [RetroNest](https://github.com/markrpearce96/RetroNest). The upstream
+> PCSX2 README follows below.
+>
+> - **Releases:** Pre-built macOS x86_64 cores at the [Releases tab](https://github.com/markrpearce96/pcsx2-libretro/releases).
+> - **Building locally:** `cmake -S . -B build -DENABLE_LIBRETRO=ON -DENABLE_QT_UI=OFF -DCMAKE_BUILD_TYPE=Release && cmake --build build --target pcsx2_libretro -j`
+> - **Updating from upstream:** see [UPSTREAM-UPDATE.md](UPSTREAM-UPDATE.md).
+> - **License:** GPL-3.0, inherited from PCSX2. See [bin/docs/License.txt](bin/docs/License.txt).
+>
+> All RetroNest-specific code lives in the `pcsx2-libretro/` directory.
+> Upstream files are untouched except for a 4-line conditional in the
+> top-level `CMakeLists.txt` and this fork-notice block.
+
+---
+
 # PCSX2
 
 ![Windows Build Status](https://img.shields.io/github/actions/workflow/status/PCSX2/pcsx2/windows_build_matrix.yml?label=%F0%9F%96%A5%EF%B8%8F%20Windows%20Builds)
