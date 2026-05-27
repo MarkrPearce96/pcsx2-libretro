@@ -208,12 +208,12 @@ jobs:
       - name: Create zip
         run: |
           cd stage
-          zip -r ../pcsx2_libretro-macos-x86_64.zip \
+          zip -r ../pcsx2_libretro.dylib.zip \
             pcsx2_libretro.dylib \
             pcsx2_libretro_resources \
             VERSION
           cd ..
-          ls -la pcsx2_libretro-macos-x86_64.zip
+          ls -la pcsx2_libretro.dylib.zip
 
       - name: Compose release body
         run: |
@@ -231,5 +231,5 @@ jobs:
           name: ${{ steps.meta.outputs.tag }}
           body_path: release_body.md
           generate_release_notes: true   # appends auto-generated commit list below body
-          files: pcsx2_libretro-macos-x86_64.zip
+          files: pcsx2_libretro.dylib.zip
           fail_on_unmatched_files: true
