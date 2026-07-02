@@ -9,6 +9,7 @@
 // the libzip plumbing and the upstream load call.
 
 #include "LibretroSaveState.h"
+#include "LibretroSaveStateFit.h" // ClassifySerializeFit — pure, unit-tested seam
 #include "LibretroFrontend.h"   // FrontendLog, g_frontend
 #include "CoreResources.h"      // kWaitPausedDeadline, kPostInitSettle
 
@@ -251,6 +252,37 @@ struct MemoryWriteSink
     }
 };
 
+// User-visible surface for the Serialize overflow failure.
+// retro_serialize returning false is silent in RetroNest's Save & Exit
+// flow — the user just loses the state with no explanation — so push an
+// OSD notification through the environment callback as well. Prefer
+// RETRO_ENVIRONMENT_SET_MESSAGE_EXT (duration/priority/level/target
+// control); fall back to legacy RETRO_ENVIRONMENT_SET_MESSAGE if the
+// host doesn't implement EXT (returns false), matching the BIOS-missing
+// pattern in LibretroFrontend.cpp. No-op if the environment callback
+// isn't wired yet (can't happen after retro_load_game, but stay safe).
+void NotifySerializeOverflow()
+{
+    if (!g_frontend.environ_cb)
+        return;
+
+    retro_message_ext ext{};
+    ext.msg      = kSerializeOverflowOsdMessage;
+    ext.duration = 5000;                            // ms — enough to read after a failed Save & Exit
+    ext.priority = 3;                               // RetroArch's frontend-notification ceiling — error tier
+    ext.level    = RETRO_LOG_ERROR;
+    ext.target   = RETRO_MESSAGE_TARGET_OSD;        // FrontendLog already covers the log target
+    ext.type     = RETRO_MESSAGE_TYPE_NOTIFICATION;
+    ext.progress = -1;
+    if (g_frontend.environ_cb(RETRO_ENVIRONMENT_SET_MESSAGE_EXT, &ext))
+        return;
+
+    retro_message msg{};
+    msg.msg    = kSerializeOverflowOsdMessage;
+    msg.frames = 300;                               // ~5 s at 60 fps — mirrors ext.duration
+    g_frontend.environ_cb(RETRO_ENVIRONMENT_SET_MESSAGE, &msg);
+}
+
 // Drives SaveState_DownloadState, then walks the returned
 // ArchiveEntryList writing each entry into an in-memory zip with
 // forced ZIP_CM_STORE compression. Returns true on success and
@@ -478,7 +510,16 @@ size_t SerializeSize()
     const size_t cached = g_serialize_size.load();
     if (cached != 0) return cached;
     if (!VMManager::HasValidVM()) return 0;
-    if (VMManager::GetState() != VMState::Running) return 0;
+    // Probe from Running OR Paused: after an overflow invalidates the cache
+    // (Serialize()), the retry happens from RetroNest's in-game menu with the
+    // VM paused — a Running-only gate would return 0 there and the retry could
+    // never succeed. WaitForVmPaused()/ResumeVm() already handle the
+    // already-paused case (no handshake, and ResumeVm leaves a paused VM
+    // paused), so probing while paused is safe.
+    {
+        const VMState s = VMManager::GetState();
+        if (s != VMState::Running && s != VMState::Paused) return 0;
+    }
 
     if (IsStateTraceEnabled())
         FrontendLog(RETRO_LOG_INFO, "[STATE_TRACE] SerializeSize: probe start");
@@ -543,26 +584,41 @@ bool Serialize(void* dst, size_t len)
         MemoryWriteSink sink;
         if (BuildZipIntoSink(sink))
         {
-            if (sink.bytes.size() > len)
+            // Fit check against the caller's actual buffer length (len),
+            // accounting for the 16-byte tail sentinel the padded layout
+            // appends — see LibretroSaveStateFit.h for the case split.
+            switch (ClassifySerializeFit(sink.bytes.size(), len, kSentinelSize))
             {
+            case SerializeFit::Overflow:
                 FrontendLog(RETRO_LOG_ERROR,
                     "Serialize: produced %zu bytes but caller buffer is %zu — "
                     "probe-once assumption violated; not writing",
                     sink.bytes.size(), len);
-            }
-            else
-            {
+                // Invalidate the probe cache: the state has outgrown
+                // probe+headroom, so returning the cached size from
+                // SerializeSize() again would make every future save
+                // fail identically. Next retro_serialize_size call
+                // re-probes at the new (larger) size.
+                g_serialize_size.store(0);
+                // Silent `return false` reads as data loss in RetroNest's
+                // Save & Exit — tell the user what happened and that a
+                // retry (with the re-probed size) should succeed.
+                NotifySerializeOverflow();
+                break;
+            case SerializeFit::ExactFit:
                 std::memcpy(dst, sink.bytes.data(), sink.bytes.size());
-                if (sink.bytes.size() < len)
-                {
-                    std::memset(static_cast<u8*>(dst) + sink.bytes.size(), 0,
-                                len - sink.bytes.size());
-                    // Tail sentinel lets readers (Unserialize and the cold-
-                    // boot file-trim helper) recover the real zip end from
-                    // a padded buffer/file. See WriteSentinel comment above.
-                    WriteSentinel(static_cast<u8*>(dst), len, sink.bytes.size());
-                }
                 ok = true;
+                break;
+            case SerializeFit::PaddedFit:
+                std::memcpy(dst, sink.bytes.data(), sink.bytes.size());
+                std::memset(static_cast<u8*>(dst) + sink.bytes.size(), 0,
+                            len - sink.bytes.size());
+                // Tail sentinel lets readers (Unserialize and the cold-
+                // boot file-trim helper) recover the real zip end from
+                // a padded buffer/file. See WriteSentinel comment above.
+                WriteSentinel(static_cast<u8*>(dst), len, sink.bytes.size());
+                ok = true;
+                break;
             }
         }
     }

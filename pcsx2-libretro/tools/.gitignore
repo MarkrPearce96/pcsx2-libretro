@@ -7,6 +7,7 @@ test_core_options
 test_loader
 test_rcheevos_hash
 test_region_prefix
+test_savestate_fit
 test_settings_overrides
 
 # Python bytecode from check_schema_fidelity.py
