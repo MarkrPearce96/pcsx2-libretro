@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0+
 
 #include "common/Threading.h"
+
+#include <chrono>
+#include <thread>
 #include "common/Assertions.h"
 #include "common/HostSys.h"
 
@@ -103,7 +106,31 @@ bool Threading::WorkSema::WaitForEmpty()
 			break;
 	}
 	pxAssertMsg(!(value & STATE_FLAG_WAITING_EMPTY), "Multiple threads attempted to wait for empty (not currently supported)");
-	m_empty_sema.Wait();
+	// SP10 (libretro fork): self-healing wait — bounded sleeps with a state
+	// recheck instead of one unbounded m_empty_sema.Wait(). Two field
+	// deadlocks on this exact wait (MTGS 2026-07-03, then MTVU the same day
+	// with the Reset() handoff fix already deployed) proved the wake-up can
+	// be lost through an interleaving we could not fully pin down even with
+	// live samples; with this loop a lost wake costs ~1 ms instead of
+	// wedging VM shutdown forever. Exit conditions:
+	//  - TryWait succeeds: the normal handoff worked.
+	//  - state < 0: the worker is asleep/spinning, i.e. the queue IS empty —
+	//    the condition we are waiting for holds. The worker posts BEFORE its
+	//    sleep-CAS becomes observable-with-post (CAS -> post -> sleep), so
+	//    give the in-flight post a moment, then drain any stale count so a
+	//    FUTURE WaitForEmpty cannot consume it and return early.
+	while (!m_empty_sema.TryWait())
+	{
+		const s32 cur = m_state.load(std::memory_order_acquire);
+		if (cur < 0)
+		{
+			std::this_thread::sleep_for(std::chrono::microseconds(100));
+			while (m_empty_sema.TryWait())
+				;
+			return !IsDead(cur);
+		}
+		std::this_thread::sleep_for(std::chrono::milliseconds(1));
+	}
 	return !IsDead(m_state.load(std::memory_order_relaxed));
 }
 
@@ -121,7 +148,19 @@ bool Threading::WorkSema::WaitForEmptyWithSpin()
 		value = m_state.load(std::memory_order_acquire);
 	}
 	pxAssertMsg(!(value & STATE_FLAG_WAITING_EMPTY), "Multiple threads attempted to wait for empty (not currently supported)");
-	m_empty_sema.Wait();
+	// SP10: same self-healing wait as WaitForEmpty() above.
+	while (!m_empty_sema.TryWait())
+	{
+		const s32 cur = m_state.load(std::memory_order_acquire);
+		if (cur < 0)
+		{
+			std::this_thread::sleep_for(std::chrono::microseconds(100));
+			while (m_empty_sema.TryWait())
+				;
+			return !IsDead(cur);
+		}
+		std::this_thread::sleep_for(std::chrono::milliseconds(1));
+	}
 	return !IsDead(m_state.load(std::memory_order_relaxed));
 }
 
@@ -134,7 +173,19 @@ void Threading::WorkSema::Kill()
 
 void Threading::WorkSema::Reset()
 {
-	m_state = STATE_RUNNING_0;
+	// SP10 (libretro fork): preserve a pending empty-waiter across Reset.
+	// The raw `m_state = STATE_RUNNING_0` store erased STATE_FLAG_WAITING_EMPTY
+	// without posting m_empty_sema — the ONLY primitive that could drop the
+	// flag without a post (Kill posts, WaitForWork's sleep transition posts).
+	// Field deadlock (deterministic, God of War quit-from-menu, sampled
+	// 2026-07-03): MTGS's close/reopen cycle (ThreadEntryPoint calls Reset
+	// after GSclose) raced VMManager::Shutdown's WaitGS -> WaitForEmpty; the
+	// waiter's flag was clobbered, the GS thread then slept without posting,
+	// and the CPU thread waited on m_empty_sema forever. Handing off the flag
+	// here wakes the waiter, which re-checks state and proceeds.
+	const s32 old = m_state.exchange(STATE_RUNNING_0, std::memory_order_acq_rel);
+	if (old & STATE_FLAG_WAITING_EMPTY)
+		m_empty_sema.Post();
 }
 
 #if !defined(__APPLE__) // macOS implementations are in DarwinThreads

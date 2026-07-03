@@ -150,6 +150,16 @@ std::atomic<bool> g_memory_map_issued{false};
 // game load.
 static VMState s_pause_prev_state = VMState::Shutdown;
 
+// SP10: set when EmuThread::JoinWithTimeout expired during retro_unload_game
+// and the wedged thread was detached (field deadlock 2026-07-03:
+// VMManager::Shutdown stuck in WorkSema::WaitForEmpty with GS/MTVU idle in
+// WaitForWork). While set: retro_load_game refuses (PCSX2's statics are in an
+// unknown mid-shutdown state — a second boot would crash), retro_deinit
+// no-ops (teardown would race the detached thread), and the host reads it
+// via the exported retronest_shutdown_wedged() to skip dlclose so the
+// detached thread never executes unmapped pages (the SP3.6 attempt-3 SIGBUS).
+static std::atomic<bool> s_shutdown_wedged{false};
+
 // SP6.5 Task 4.5: private env call agreed with RetroNest. RetroNest
 // stores the resume-state path in EnvironmentContext::bootStatePath
 // before retro_load_game; we query during retro_load_game and, if a
@@ -293,12 +303,29 @@ RETRO_API void retro_init(void)
 
 RETRO_API void retro_deinit(void)
 {
+    // SP10: a wedged (detached) shutdown thread may still be executing inside
+    // this dylib and reading g_frontend — do NOT tear anything down. The host
+    // sees retronest_shutdown_wedged() and keeps the dylib mapped.
+    if (s_shutdown_wedged.load())
+    {
+        FrontendLog(RETRO_LOG_ERROR, "retro_deinit: skipped — shutdown wedged");
+        return;
+    }
     // Defensive: ensure emu thread is stopped before tearing down g_frontend.
     Pcsx2Libretro::EmuThread& emu = Pcsx2Libretro::GetEmuThread();
     emu.RequestShutdown();
     emu.Join();
     FrontendLog(RETRO_LOG_INFO, "retro_deinit");
     g_frontend = FrontendState{};
+}
+
+// SP10: host-side wedge query (dlsym'd by RetroNest like retronest_set_paused).
+// True after a shutdown timeout — the host must skip retro_deinit and dlclose
+// (keep the dylib mapped for the detached thread) and refuse to start another
+// PCSX2 session in this process.
+RETRO_API bool retronest_shutdown_wedged(void)
+{
+    return s_shutdown_wedged.load();
 }
 
 RETRO_API unsigned retro_api_version(void)
@@ -539,6 +566,27 @@ RETRO_API void   retro_cheat_set(unsigned, bool, const char*) {}
 
 RETRO_API bool retro_load_game(const struct retro_game_info* game)
 {
+    // SP10: refuse to boot on wedged PCSX2 statics (see s_shutdown_wedged).
+    if (s_shutdown_wedged.load())
+    {
+        FrontendLog(RETRO_LOG_ERROR,
+            "retro_load_game refused: previous shutdown wedged — restart the host");
+        if (g_frontend.environ_cb)
+        {
+            retro_message_ext ext{};
+            ext.msg      = "PCSX2 is in a bad state from the last session. "
+                           "Restart RetroNest to play PS2 games.";
+            ext.duration = 8000;
+            ext.priority = 3;
+            ext.level    = RETRO_LOG_ERROR;
+            ext.target   = RETRO_MESSAGE_TARGET_ALL;
+            ext.type     = RETRO_MESSAGE_TYPE_NOTIFICATION;
+            ext.progress = -1;
+            g_frontend.environ_cb(RETRO_ENVIRONMENT_SET_MESSAGE_EXT, &ext);
+        }
+        return false;
+    }
+
     if (!game || !game->path)
     {
         FrontendLog(RETRO_LOG_ERROR, "retro_load_game called with null game info");
@@ -697,8 +745,32 @@ RETRO_API void retro_unload_game(void)
     FrontendLog(RETRO_LOG_INFO, "retro_unload_game: requesting VM shutdown");
     Pcsx2Libretro::EmuThread& emu = Pcsx2Libretro::GetEmuThread();
     emu.RequestShutdown();
-    emu.Join();
-    FrontendLog(RETRO_LOG_INFO, "retro_unload_game: emu thread joined cleanly");
+    // SP10: bounded join (was: indefinite emu.Join(), which froze the host
+    // forever when VMManager::Shutdown deadlocked). 15s is generous — a clean
+    // shutdown takes well under 1s; memory-card flushes worst-case a few s.
+    if (emu.JoinWithTimeout(15000))
+    {
+        FrontendLog(RETRO_LOG_INFO, "retro_unload_game: emu thread joined cleanly");
+    }
+    else
+    {
+        s_shutdown_wedged.store(true);
+        // Surface it: the host also learns via retronest_shutdown_wedged(),
+        // but tell the user directly what the consequence is.
+        if (g_frontend.environ_cb)
+        {
+            retro_message_ext ext{};
+            ext.msg      = "PCSX2 did not shut down cleanly. Restart RetroNest "
+                           "before launching another PS2 game.";
+            ext.duration = 8000;
+            ext.priority = 3;
+            ext.level    = RETRO_LOG_ERROR;
+            ext.target   = RETRO_MESSAGE_TARGET_ALL;
+            ext.type     = RETRO_MESSAGE_TYPE_NOTIFICATION;
+            ext.progress = -1;
+            g_frontend.environ_cb(RETRO_ENVIRONMENT_SET_MESSAGE_EXT, &ext);
+        }
+    }
 }
 
 RETRO_API unsigned retro_get_region(void) { return g_detected_region; }
