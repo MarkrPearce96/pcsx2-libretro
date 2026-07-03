@@ -60,7 +60,8 @@ jobs:
             plutosvg \
             plutovg \
             molten-vk \
-            lz4
+            lz4 \
+            dylibbundler
 
       - name: Configure (cmake under arch -x86_64)
         run: |
@@ -89,6 +90,33 @@ jobs:
           arch -x86_64 env \
             PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin \
             /usr/local/bin/cmake --build build --target pcsx2_libretro -j
+
+      - name: Bundle non-system dependencies (self-contained release)
+        run: |
+          # The core links ~10 Homebrew dylibs by their EXACT versioned name
+          # (e.g. libryml.0.15.2.dylib). A user whose Homebrew has a different
+          # version can't dlopen it — the core dies silently at load (observed
+          # 2026-07-04: rapidyaml 0.15.2 on the runner vs 0.12.1 on the user).
+          # dylibbundler copies every non-system dep beside the core in
+          # pcsx2_libretro_libs/ and rewrites the load commands to
+          # @loader_path/pcsx2_libretro_libs/, recursively, then ad-hoc signs.
+          # The RetroNest installer unzips into cores/, so @loader_path (the
+          # core's own dir) + /pcsx2_libretro_libs/ resolves on any machine.
+          cd build/pcsx2-libretro
+          arch -x86_64 dylibbundler -od -b \
+            -x pcsx2_libretro.dylib \
+            -d pcsx2_libretro_libs/ \
+            -p @loader_path/pcsx2_libretro_libs/
+          echo "=== verifying no Homebrew deps remain ==="
+          if otool -L pcsx2_libretro.dylib | tail -n +2 | grep -E '/usr/local|/opt/homebrew'; then
+            echo "::error::core still references Homebrew paths after bundling"; exit 1
+          fi
+          for lib in pcsx2_libretro_libs/*.dylib; do
+            if otool -L "$lib" | tail -n +2 | grep -E '/usr/local/opt|/usr/local/Cellar|/opt/homebrew'; then
+              echo "::error::bundled $lib still references Homebrew"; exit 1
+            fi
+          done
+          echo "bundled $(ls pcsx2_libretro_libs | wc -l) libs; core is self-contained"
 
       - name: Compile Metal shader libraries into bin/resources/
         run: |
@@ -138,6 +166,13 @@ jobs:
           path: build/pcsx2-libretro/pcsx2_libretro.dylib
           if-no-files-found: error
 
+      - name: Upload bundled libs artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pcsx2_libretro-libs
+          path: build/pcsx2-libretro/pcsx2_libretro_libs/
+          if-no-files-found: error
+
       - name: Upload resources artifact
         uses: actions/upload-artifact@v4
         with:
@@ -166,6 +201,12 @@ jobs:
         with:
           name: pcsx2_libretro-resources
           path: stage/pcsx2_libretro_resources/
+
+      - name: Download bundled libs artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: pcsx2_libretro-libs
+          path: stage/pcsx2_libretro_libs/
 
       - name: Fetch upstream master (for SHA lookup)
         run: |
@@ -211,6 +252,7 @@ jobs:
           zip -r ../pcsx2_libretro.dylib.zip \
             pcsx2_libretro.dylib \
             pcsx2_libretro_resources \
+            pcsx2_libretro_libs \
             VERSION
           cd ..
           ls -la pcsx2_libretro.dylib.zip
