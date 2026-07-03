@@ -48,6 +48,15 @@ public:
     // Blocks until the emu thread has exited. Idempotent.
     void Join();
 
+    // SP10: bounded variant for retro_unload_game. Polls m_thread_done until
+    // deadline; on success joins (fast) and returns true. On timeout DETACHES
+    // the wedged thread and returns false — the caller must then mark the
+    // core wedged (retronest_shutdown_wedged) so the host skips retro_deinit
+    // and dlclose, keeping this dylib mapped for the detached thread's sake
+    // (the SP3.6 "attempt 3" SIGBUS happened precisely because the host
+    // dlclosed under a detached thread; with the host contract it is safe).
+    bool JoinWithTimeout(unsigned timeout_ms);
+
     // True between successful Start() and Join() (or thread exit).
     bool IsRunning() const;
 

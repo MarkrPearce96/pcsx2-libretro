@@ -177,7 +177,43 @@ void EmuThread::Join()
     // (user must Cmd+Q RetroNest from the dock to recover) but does not
     // crash on the quit click itself, which is strictly better than the
     // pre-attempt baseline that crashed via the forced-fallback SetState.
+    //
+    // SP10 update: retro_unload_game now uses JoinWithTimeout instead —
+    // attempt 3 (bounded wait + detach) became safe once the host learned
+    // to skip retro_deinit/dlclose for a wedged core (see
+    // retronest_shutdown_wedged in LibretroFrontend.cpp). This indefinite
+    // Join remains only for the destructor path, where joinable() is
+    // already false if a wedged thread was detached.
     m_thread.join();
+}
+
+bool EmuThread::JoinWithTimeout(unsigned timeout_ms)
+{
+    if (!m_thread.joinable()) return true;
+
+    // Poll the done flag rather than joining directly: join() can't time
+    // out, and the 2026-07-03 field deadlock (VMManager::Shutdown stuck in
+    // WorkSema::WaitForEmpty while the GS thread idled in WaitForWork —
+    // crash report RetroNest-2026-07-03-153948.ips) proved Shutdown can
+    // wedge after Execute() has already returned.
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::milliseconds(timeout_ms);
+    while (!m_thread_done.load(std::memory_order_acquire))
+    {
+        if (std::chrono::steady_clock::now() >= deadline)
+        {
+            FrontendLog(RETRO_LOG_ERROR,
+                "EmuThread: shutdown did not complete within %ums — detaching "
+                "wedged thread (VMState=%d). Core is now unusable until the "
+                "host process restarts.",
+                timeout_ms, static_cast<int>(VMManager::GetState()));
+            m_thread.detach();
+            return false;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    m_thread.join();  // done flag set — returns promptly
+    return true;
 }
 
 bool EmuThread::IsRunning() const
@@ -376,8 +412,14 @@ void EmuThread::ThreadFunc(VMBootParameters params)
         VMManager::Execute();
     }
 
-    FrontendLog(RETRO_LOG_INFO, "VMManager::Execute returned; shutting down VM");
+    // SP10: state snapshot BEFORE Shutdown — if Shutdown wedges (observed
+    // 2026-07-03: WaitForEmpty vs WaitForWork deadlock), the next hang's log
+    // shows which subsystem state it entered Shutdown with.
+    FrontendLog(RETRO_LOG_INFO,
+        "VMManager::Execute returned; shutting down VM (VMState=%d MTGS::IsOpen=%d THREAD_VU1=%d)",
+        static_cast<int>(VMManager::GetState()), MTGS::IsOpen() ? 1 : 0, THREAD_VU1 ? 1 : 0);
     VMManager::Shutdown(false);
+    FrontendLog(RETRO_LOG_INFO, "VMManager::Shutdown returned");
     VMManager::Internal::CPUThreadShutdown();
     FrontendLog(RETRO_LOG_INFO, "EmuThread: clean exit");
     m_thread_done.store(true, std::memory_order_release);
