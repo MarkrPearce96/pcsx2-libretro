@@ -107,6 +107,19 @@ jobs:
             -x pcsx2_libretro.dylib \
             -d pcsx2_libretro_libs/ \
             -p @loader_path/pcsx2_libretro_libs/
+          # dylibbundler applies ONE prefix to every rewrite, but a lib INSIDE
+          # pcsx2_libretro_libs/ has that dir as its own @loader_path — so a
+          # sibling ref becomes @loader_path/pcsx2_libretro_libs/pcsx2_libretro_libs/lib
+          # (doubled → not found → core fails to dlopen). Flatten sibling refs
+          # to @loader_path/<lib> and re-sign. The core (one level up) keeps
+          # the subdir prefix.
+          for lib in pcsx2_libretro_libs/*.dylib; do
+            otool -L "$lib" | tail -n +2 | awk '{print $1}' \
+              | grep '@loader_path/pcsx2_libretro_libs/' | while read -r dep; do
+                install_name_tool -change "$dep" "@loader_path/$(basename "$dep")" "$lib"
+              done
+            codesign --force --sign - "$lib"
+          done
           echo "=== verifying no Homebrew deps remain ==="
           if otool -L pcsx2_libretro.dylib | tail -n +2 | grep -E '/usr/local|/opt/homebrew'; then
             echo "::error::core still references Homebrew paths after bundling"; exit 1
