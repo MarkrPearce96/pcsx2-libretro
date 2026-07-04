@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0+
 
 #include "CoreOptions.h"
+#include "retronest-libretro/emit_core_options_v2.h"
 #include "CoreOptionsEmulation.h"
 #include "CoreOptionsAudio.h"
 #include "CoreOptionsMemoryCards.h"
@@ -54,19 +55,9 @@ const std::vector<retro_core_option_v2_definition>& BuildDefinitions()
 
 bool EmitCoreOptionsV2(retro_environment_t cb)
 {
-    if (!cb) return false;
-
-    // SET_CORE_OPTIONS_V2 wants a retro_core_options_v2 (categories +
-    // definitions). categories=nullptr → uncategorized; RetroNest's host
-    // adapter places these under SettingDef.category on its side.
-    retro_core_options_v2 opts{};
-    opts.categories  = nullptr;
-    opts.definitions = const_cast<retro_core_option_v2_definition*>(
-        BuildDefinitions().data());
-
-    const bool ok = cb(RETRO_ENVIRONMENT_SET_CORE_OPTIONS_V2, &opts);
+    const bool ok = retronest::EmitCoreOptionsV2(cb, BuildDefinitions().data());
     if (!ok) {
-        // Per libretro.h:2340, false means the host doesn't support option
+        // Per libretro.h, false means the host doesn't support option
         // CATEGORIES — options themselves are still registered and
         // GET_VARIABLE will work. We pass categories=nullptr anyway, so this
         // is purely informational; user values still flow.

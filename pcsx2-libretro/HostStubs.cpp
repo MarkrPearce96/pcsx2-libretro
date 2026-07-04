@@ -35,7 +35,8 @@
 #include "common/WindowInfo.h"
 
 #include "LibretroFrontend.h"
-#include "MacNSViewMetrics.h"
+#include "retronest-libretro/retronest_libretro.h"
+#include "retronest-libretro/retronest_nsview.h"
 #include "Settings.h"
 
 #include <atomic>
@@ -265,10 +266,7 @@ std::optional<WindowInfo> Host::AcquireRenderWindow(bool /*recreate_window*/)
     }
 
     void* ns_view = nullptr;
-    // RETRONEST_ENVIRONMENT_GET_MACOS_NSVIEW = 1 | RETRO_ENVIRONMENT_PRIVATE (0x20000)
-    // Hardcoded to avoid a cross-repo header dependency; documented here so a future
-    // reader knows it matches RETRO_ENVIRONMENT_PRIVATE from the libretro header.
-    static constexpr unsigned RETRONEST_ENVIRONMENT_GET_MACOS_NSVIEW = (1 | 0x20000);
+    // Canonical value + docs: retronest-libretro/retronest_libretro.h.
     if (!Pcsx2Libretro::g_frontend.environ_cb(RETRONEST_ENVIRONMENT_GET_MACOS_NSVIEW, &ns_view) || !ns_view)
     {
         Pcsx2Libretro::FrontendLog(RETRO_LOG_ERROR,
@@ -289,7 +287,10 @@ std::optional<WindowInfo> Host::AcquireRenderWindow(bool /*recreate_window*/)
     // that. Fallback to PS2-native if Query returns zero (NSView not yet
     // realized / sized), which preserves the previous behavior in the
     // degenerate case.
-    const auto metrics = Pcsx2Libretro::Mac::Query(ns_view);
+    // Shared helper (retronest-libretro) — also fixes off-main-thread
+    // AppKit access: AcquireRenderWindow runs on the MTGS thread and the
+    // old local Query read NSView state without bouncing to main.
+    const auto metrics = retronest::QueryNSViewMetrics(ns_view);
     const u32 sw = (metrics.surface_width  > 0) ? metrics.surface_width  : 640;
     const u32 sh = (metrics.surface_height > 0) ? metrics.surface_height : 448;
     const float ss = (metrics.surface_scale > 0.0f) ? metrics.surface_scale : 1.0f;
@@ -344,7 +345,7 @@ void Host::RequestResizeHostDisplay(s32 /*width*/, s32 /*height*/)
     // aspect math would still see pre-event dimensions.
     void* nsv = Pcsx2Libretro::g_acquired_ns_view.load(std::memory_order_acquire);
     if (!nsv) return;
-    const auto m = Pcsx2Libretro::Mac::Query(nsv);
+    const auto m = retronest::QueryNSViewMetrics(nsv);
     if (m.surface_width == 0 || m.surface_height == 0) return;
     GSResizeDisplayWindow(m.surface_width, m.surface_height, m.surface_scale);
 }
