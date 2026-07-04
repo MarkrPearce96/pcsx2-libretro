@@ -6,6 +6,10 @@
 // Skeleton phase: enough to load, identify as PCSX2, and gracefully
 // refuse retro_load_game. No VM is initialized; no PCSX2 code runs.
 
+// Compile-check the retronest_* export signatures against the contract.
+#define RETRONEST_LIBRETRO_CORE
+#include "retronest-libretro/retronest_libretro.h"
+
 #include "LibretroFrontend.h"
 #include "LibretroAudioStream.h"
 #include "libretro.h"
@@ -168,12 +172,7 @@ static std::atomic<bool> s_shutdown_wedged{false};
 // (pcsx2/VMManager.cpp:1636-1643) — the only ordering that produces a
 // runnable VM for cold-resume on launch.
 //
-// Number must match RetroNest's environment_callbacks.h define exactly.
-// RETRO_ENVIRONMENT_PRIVATE = 0x20000 per libretro.h; 0x20001 is
-// already used by RETRONEST_ENVIRONMENT_GET_MACOS_NSVIEW; 0x20002 is
-// the next free RetroNest-private slot.
-constexpr unsigned RETRONEST_ENVIRONMENT_GET_BOOT_STATE_PATH =
-    (2u | RETRO_ENVIRONMENT_PRIVATE);
+// Canonical value + docs: retronest-libretro/retronest_libretro.h.
 
 // RETRONEST_STATE_TRACE: env-gated trace at retro_reset boundary.
 // Zero overhead when unset (single getenv at first call, cached bool

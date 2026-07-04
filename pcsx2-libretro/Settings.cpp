@@ -20,6 +20,7 @@
 #include "pcsx2/VMManager.h"
 
 #include "libretro.h"
+#include "retronest-libretro/retronest_libretro.h"
 
 #include <vector>
 
@@ -30,20 +31,12 @@ namespace
     MemorySettingsInterface g_si;
     bool g_initialized = false;
 
-    // RetroNest-private env enums for path overrides. Number must match
-    // RetroNest-Project's environment_callbacks.h exactly.
-    //   0x20003 = GET_MEMCARDS_DIR
-    //   0x20004 = GET_TEXTURES_DIR
-    // (0x20002 is GET_BOOT_STATE_PATH; see LibretroFrontend.cpp.)
-    // Each returns true with *data set to const char* when an override
-    // is configured; returns false otherwise. We fall through to the
-    // existing save_dir-based default when false comes back, so any
-    // host that doesn't implement these env enums keeps the prior
-    // behavior unchanged.
-    constexpr unsigned RETRONEST_ENVIRONMENT_GET_MEMCARDS_DIR =
-        (3u | RETRO_ENVIRONMENT_PRIVATE);
-    constexpr unsigned RETRONEST_ENVIRONMENT_GET_TEXTURES_DIR =
-        (4u | RETRO_ENVIRONMENT_PRIVATE);
+    // RetroNest-private env enums for path overrides — canonical values +
+    // docs in retronest-libretro/retronest_libretro.h. Each returns true
+    // with *data set to const char* when an override is configured; we
+    // fall through to the existing save_dir-based default when false
+    // comes back, so any host that doesn't implement these env enums
+    // keeps the prior behavior unchanged.
 
     // Returns the override for `env_id` from the host, or empty string.
     // Pulled out for standalone unit testing — see tools/test_settings_overrides.cpp.

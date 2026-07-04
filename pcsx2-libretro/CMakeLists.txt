@@ -23,18 +23,26 @@ target_sources(pcsx2_libretro PRIVATE
     CoreOptionsMemoryCards.cpp
     CoreResources.cpp
     AspectRatio.cpp
-    MacNSViewMetrics.mm
+    retronest-libretro/retronest_nsview.mm
 )
 
 # The PCSX2 PCH is C++-only; .mm files re-enable Objective-C and the PCH
 # rejects them with "Objective-C was disabled in precompiled file". Skip
 # the PCH for any Objective-C++ sources.
-set_source_files_properties(MacNSViewMetrics.mm PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+set_source_files_properties(retronest-libretro/retronest_nsview.mm PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 
 target_include_directories(pcsx2_libretro PRIVATE
     "${CMAKE_BINARY_DIR}/common/include"
     "${CMAKE_SOURCE_DIR}/pcsx2"
     "${CMAKE_CURRENT_SOURCE_DIR}"
+)
+
+# Packet 7: the vendored contract package must match its manifest — edits
+# belong in RetroNest-Project/vendor/retronest-libretro/ + sync.sh.
+add_custom_target(retronest_contract_check ALL
+    COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/retronest-libretro/check-drift.sh
+    COMMENT "retronest-libretro drift check"
+    VERBATIM
 )
 
 target_link_libraries(pcsx2_libretro PRIVATE
