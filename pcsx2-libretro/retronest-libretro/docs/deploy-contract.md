@@ -1,11 +1,13 @@
 # Core deploy/packaging contract
 
 The single description of how a RetroNest core reaches
-`{root}/emulators/libretro/cores/`. CI consolidation into a shared script
-is a planned follow-up (Packet 7 decision 5) — until then the three CI
-workflows (pcsx2/ppsspp/dolphin `libretro_release.yml`) and duckstation's
-`package.sh` each implement this contract independently. When you fix one,
-check the others.
+`{root}/emulators/libretro/cores/`. The §Dependency bundling steps are
+implemented ONCE in this package's `package-core.sh` — the pcsx2 and
+dolphin release workflows call their vendored copy. ppsspp bundles
+nothing (no Homebrew deps) and duckstation's local-only `package.sh`
+deliberately uses an rpath-into-app-Frameworks strategy instead; the
+zip/staging steps around the bundling remain per-fork (Sys trees,
+metallibs, resources are core-specific).
 
 ## Install layout (per core)
 
