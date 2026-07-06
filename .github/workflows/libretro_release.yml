@@ -97,39 +97,11 @@ jobs:
           # (e.g. libryml.0.15.2.dylib). A user whose Homebrew has a different
           # version can't dlopen it — the core dies silently at load (observed
           # 2026-07-04: rapidyaml 0.15.2 on the runner vs 0.12.1 on the user).
-          # dylibbundler copies every non-system dep beside the core in
-          # pcsx2_libretro_libs/ and rewrites the load commands to
-          # @loader_path/pcsx2_libretro_libs/, recursively, then ad-hoc signs.
-          # The RetroNest installer unzips into cores/, so @loader_path (the
-          # core's own dir) + /pcsx2_libretro_libs/ resolves on any machine.
-          cd build/pcsx2-libretro
-          arch -x86_64 dylibbundler -od -b \
-            -x pcsx2_libretro.dylib \
-            -d pcsx2_libretro_libs/ \
-            -p @loader_path/pcsx2_libretro_libs/
-          # dylibbundler applies ONE prefix to every rewrite, but a lib INSIDE
-          # pcsx2_libretro_libs/ has that dir as its own @loader_path — so a
-          # sibling ref becomes @loader_path/pcsx2_libretro_libs/pcsx2_libretro_libs/lib
-          # (doubled → not found → core fails to dlopen). Flatten sibling refs
-          # to @loader_path/<lib> and re-sign. The core (one level up) keeps
-          # the subdir prefix.
-          for lib in pcsx2_libretro_libs/*.dylib; do
-            otool -L "$lib" | tail -n +2 | awk '{print $1}' \
-              | grep '@loader_path/pcsx2_libretro_libs/' | while read -r dep; do
-                install_name_tool -change "$dep" "@loader_path/$(basename "$dep")" "$lib"
-              done
-            codesign --force --sign - "$lib"
-          done
-          echo "=== verifying no Homebrew deps remain ==="
-          if otool -L pcsx2_libretro.dylib | tail -n +2 | grep -E '/usr/local|/opt/homebrew'; then
-            echo "::error::core still references Homebrew paths after bundling"; exit 1
-          fi
-          for lib in pcsx2_libretro_libs/*.dylib; do
-            if otool -L "$lib" | tail -n +2 | grep -E '/usr/local/opt|/usr/local/Cellar|/opt/homebrew'; then
-              echo "::error::bundled $lib still references Homebrew"; exit 1
-            fi
-          done
-          echo "bundled $(ls pcsx2_libretro_libs | wc -l) libs; core is self-contained"
+          # Bundle + flatten + sign + verify all live in the vendored contract
+          # package (deploy-contract.md §Dependency bundling) — shared with
+          # dolphin's workflow, drift-checked like every package file.
+          pcsx2-libretro/retronest-libretro/package-core.sh \
+            build/pcsx2-libretro/pcsx2_libretro.dylib --arch x86_64
 
       - name: Compile Metal shader libraries into bin/resources/
         run: |
