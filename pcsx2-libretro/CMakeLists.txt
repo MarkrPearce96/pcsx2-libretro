@@ -68,26 +68,3 @@ if(PACKAGE_MODE)
 else()
     install(TARGETS pcsx2_libretro LIBRARY DESTINATION ${CMAKE_SOURCE_DIR}/bin)
 endif()
-
-# SP7c Phase 0: schema-fidelity check between this core's CoreOptions*.cpp
-# and RetroNest-Project's Pcsx2LibretroAdapter::settingsSchema().
-#
-# Invoked via:    cmake --build build-arm64 --target check_schema_fidelity
-# (or)            make -C build-arm64 check_schema_fidelity
-#
-# The script's --host path defaults to the user's known-good location; pass
-# -DRETRONEST_PCSX2_LIBRETRO_ADAPTER=<absolute path> at configure time to
-# override (e.g. for CI runners).
-set(RETRONEST_PCSX2_LIBRETRO_ADAPTER
-    "$ENV{HOME}/Documents/Projects/RetroNest-Project/cpp/src/adapters/libretro/pcsx2_libretro_adapter.cpp"
-    CACHE PATH "Host-side libretro adapter for schema-fidelity check"
-)
-
-add_custom_target(check_schema_fidelity
-    COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_schema_fidelity.py
-            --core "${CMAKE_CURRENT_SOURCE_DIR}/CoreOptions*.cpp"
-            --host "${RETRONEST_PCSX2_LIBRETRO_ADAPTER}"
-    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-    COMMENT "Checking core/host SettingDef schema fidelity"
-    VERBATIM
-)
