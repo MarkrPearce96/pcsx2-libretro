@@ -40,6 +40,27 @@ options (`CoreOptions.cpp` → `SET_CORE_OPTIONS_V2`). Changing option
 keys/values/defaults here flows into RetroNest automatically after a
 rebuild + re-probe; follow `retronest-libretro/docs/option-style-guide.md`.
 
+## Updating from upstream (carries patches — a sync is real work)
+Unlike the stock `mgba-libretro` mirror, this fork carries RetroNest source
+patches (NSView/Metal handoff, the `RETRONEST_ENVIRONMENT_*` contract,
+CoreOptions, the WorkSema deadlock band-aid), so an upstream sync **can and
+will conflict**. `upstream` = `PCSX2/pcsx2`, branch `main`, release arch
+**x86_64** (CI builds under Rosetta).
+```sh
+git fetch upstream
+git merge upstream/master        # resolve conflicts where upstream touched
+                                 # the same code as our patches
+# if the contract package changed, re-sync from RetroNest-Project:
+#   ./vendor/retronest-libretro/sync.sh   (build fails on drift otherwise)
+# REBUILD LOCALLY + TEST IN RETRONEST — not just "compiles": confirm rendering
+# (NSView handoff), 2-player, analog/rumble, settings schema still work.
+git push origin main
+git tag v2026.MM.DD && git push origin v2026.MM.DD   # CI rebuilds + republishes
+```
+Only sync when you actually want an upstream fix/feature — each sync costs
+conflict-resolution + a full retest. Upstreaming patches (below) shrinks the
+delta and makes future syncs easier.
+
 ## Upstream PRs
 Upstream PRs go through the TRUE fork `prfork` = `MarkrPearce96/pcsx2`
 (e.g. #14658, WorkSema). Pushing upstream-derived branches to THIS repo
