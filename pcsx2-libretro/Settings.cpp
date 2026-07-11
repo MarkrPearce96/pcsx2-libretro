@@ -205,7 +205,31 @@ void InitializeDefaults(const std::string& system_dir,
     }
     {
         Error err;
-        if (!EmuFolders::SetDataDirectory(&err))
+        // RetroNest portability: PCSX2's SetDataDirectory() resolves DataRoot to
+        // the platform-native default (on macOS ~/Library/Application Support/PCSX2)
+        // and creates it. EmuFolders::LoadConfig then derives every folder we don't
+        // explicitly override below — Savestates(sstates), Snapshots(snaps), Logs,
+        // Cheats, Patches, Covers, GameSettings, Cache, InputProfiles, Videos, and
+        // Settings(inis, home of playtime.dat) — relative to DataRoot, leaking them
+        // into that native location and breaking RetroNest's "all data self-contained
+        // under {root}" contract. When the host provides a save_dir, root DataRoot
+        // there instead so those folders live under {root}/emulators/pcsx2/{system}/;
+        // skipping SetDataDirectory() means the native dir is never even created.
+        // Bios(system_dir), Resources(dylib-adjacent), MemoryCards + Textures
+        // (save_dir/...) are set to their own absolute paths below, unaffected.
+        if (!save_dir.empty())
+        {
+            EmuFolders::DataRoot = save_dir;
+            EmuFolders::Settings = save_dir + "/inis";
+            if (!FileSystem::EnsureDirectoryExists(EmuFolders::DataRoot.c_str(), false, &err) ||
+                !FileSystem::EnsureDirectoryExists(EmuFolders::Settings.c_str(), false, &err))
+            {
+                FrontendLog(RETRO_LOG_WARN,
+                    "Failed to create RetroNest PCSX2 data root '%s': %s — continuing anyway",
+                    EmuFolders::DataRoot.c_str(), err.GetDescription().c_str());
+            }
+        }
+        else if (!EmuFolders::SetDataDirectory(&err))
         {
             FrontendLog(RETRO_LOG_WARN,
                 "EmuFolders::SetDataDirectory failed: %s — continuing anyway",
