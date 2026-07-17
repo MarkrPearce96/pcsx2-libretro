@@ -5,16 +5,30 @@ in-process by RetroNest. Branch: `main`, remote `origin` =
 `MarkrPearce96/pcsx2-libretro` (private, standalone — NOT a GitHub fork).
 
 ## Build + arch policy
-PCSX2 is **x86_64-only** (recompilers). Local build dirs: `build-x86_64`
-(the one that matters — RetroNest's daily driver is the x86_64/Rosetta app)
-and `build-arm64` (stub). x86_64 CMake invocations MUST use
-`arch -x86_64 /usr/local/bin/cmake` — bare `arch -x86_64 cmake` resolves to
-the arm64 Homebrew cmake and dies with "Bad CPU type". Never pipe build
-output (masks the exit status).
+Two architectures, one tree (branch `arm64-merge`; `main` is still x86-only):
+- **x86_64** (upstream recompilers): local dir `build-x86_64`. CMake MUST use
+  `arch -x86_64 /usr/local/bin/cmake` — bare `arch -x86_64 cmake` resolves to
+  the arm64 Homebrew cmake and dies with "Bad CPU type".
+- **arm64 native** (ARMSX2 recompilers, imported 2026-07-18): local dir
+  `build-arm64`. Use /opt/homebrew tools + prefix, and BOTH
+  `-DCMAKE_IGNORE_PATH=/usr/local -DCMAKE_IGNORE_PREFIX_PATH=/usr/local`:
 
 ```sh
 arch -x86_64 /usr/local/bin/cmake --build build-x86_64 -j 6 --target pcsx2_libretro
+# arm64:
+PATH=/opt/homebrew/bin:$PATH cmake -S . -B build-arm64 -G Ninja \
+  -DCMAKE_OSX_ARCHITECTURES=arm64 -DENABLE_LIBRETRO=ON -DENABLE_QT_UI=OFF \
+  -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=/opt/homebrew \
+  -DCMAKE_IGNORE_PATH=/usr/local -DCMAKE_IGNORE_PREFIX_PATH=/usr/local
+cmake --build build-arm64 --target pcsx2_libretro -j
 ```
+
+Never pipe build output (masks the exit status). At runtime the core needs
+`pcsx2_libretro_resources/` NEXT TO the dylib (dladdr-resolved), and the
+`.metallib`s inside it MUST be rebuilt whenever the PCSX2 base moves —
+stale ones assert in GSDeviceMTL (function-constant type mismatch). Local
+standalone testing: `pcsx2-libretro/tools/test_boot_macos.mm` (see its
+header; needs codesign with allow-jit for the arm64 MAP_JIT recompilers).
 
 Deploy = copy `build-x86_64/.../pcsx2_libretro.dylib` to
 `~/Documents/RetroNest/emulators/libretro/cores/` (plus
