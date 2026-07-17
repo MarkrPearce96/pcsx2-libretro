@@ -316,9 +316,18 @@ set(pcsx2DEV9Sources
 	DEV9/sockets.cpp
 	DEV9/DEV9.cpp
 	DEV9/flash.cpp
-	DEV9/pcap_io.cpp
 	DEV9/net.cpp
 	)
+
+# libpcap is unavailable on Android and iOS; DEV9 uses Android/AndroidPcapStubs.cpp
+# (the stub PCAPAdapter) instead, so the real pcap_io.cpp must NOT be compiled there
+# (it references pcap_findalldevs/pcap_open_live/... -> undefined at link, which
+# LTO release builds surface even though a debug build's --gc-sections hides it).
+# iOS also skips find_package(PCAP) in SearchForStuff.cmake, so PCAP::PCAP doesn't
+# even exist to link against there.
+if(NOT ANDROID AND NOT IOS)
+	list(APPEND pcsx2DEV9Sources DEV9/pcap_io.cpp)
+endif()
 
 # DEV9 headers
 set(pcsx2DEV9Headers
@@ -650,6 +659,10 @@ if(USE_VULKAN)
 	)
 	target_link_libraries(PCSX2_FLAGS INTERFACE vulkan-headers)
 	target_include_directories(PCSX2_FLAGS INTERFACE ${SHADERC_INCLUDE_DIR})
+	if(ANDROID AND CMAKE_ANDROID_ARCH_ABI STREQUAL "arm64-v8a")
+		# VKLoader.cpp's adrenotools_open_libvulkan splice needs adrenotools/driver.h.
+		target_link_libraries(PCSX2_FLAGS INTERFACE adrenotools)
+	endif()
 endif()
 
 set(pcsx2GSMetalShaders
@@ -1049,16 +1062,130 @@ set(pcsx2x86Headers
 	)
 
 # ARM64
+#
+# EE recompiler (aR5900*): a SINGLE canonical Phase-7 backend for every arm64 target
+# (PC macOS/Linux/Windows + Android). The Android mac-port graft fork was dropped after a
+# device A/B (canonical EE+VU + force-float, PGO tuned for the mac-port so rigged against
+# canonical) showed canonical EE at refresh parity on Android — GoW2 combat EE ~12.8ms,
+# 100% speed / 60fps. The real Android perf lever is the force-float in
+# VMManager::SetEmuThreadAffinities, not the recompiler backend. See REFACTOR_STATUS.md.
+set(pcsx2arm64EESources
+	arm64/aR5900.cpp
+	arm64/aR5900Analysis.cpp
+	arm64/aR5900LoadStore.cpp
+	arm64/aR5900Arith.cpp
+	arm64/aR5900MultDiv.cpp
+	arm64/aR5900Branch.cpp
+	arm64/aR5900FPU.cpp
+	arm64/aR5900MMI.cpp
+	)
+
 set(pcsx2arm64Sources
 	arm64/AsmHelpers.cpp
 	arm64/Vif_Dynarec.cpp
 	arm64/Vif_UnpackNEON.cpp
 	arm64/RecStubs.cpp
+	arm64/aR3000A.cpp
+	${pcsx2arm64EESources}
+	arm64/aVU.cpp
 	)
 
 set(pcsx2arm64Headers
 	arm64/AsmHelpers.h
+	arm64/aR5900.h
+	arm64/aR5900Analysis.h
+	arm64/aVU.h
+	arm64/aVU_IR.h
+	arm64/aVU_Misc.h
+	arm64/aVU_Analyze.inl
+	arm64/aVU_Alloc.inl
+	arm64/aVU_Clamp.inl
+	arm64/aVU_Misc.inl
+	arm64/aVU_Upper.inl
+	arm64/aVU_Lower.inl
+	arm64/aVU_Tables.inl
+	arm64/aVU_Flags.inl
+	arm64/aVU_Branch.inl
+	arm64/aVU_Compile.inl
 )
+
+# Mobile (arm64) platform sources, relocated from the former android/iOS core
+# forks (refresh-experimental / iOS-refresh). Source wiring only: real NDK /
+# Xcode builds are required to validate include paths and link deps.
+# See REFACTOR_STATUS.md.
+if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+	set(ARMSX2_IOS TRUE)
+endif()
+
+# NEON-optimised SPU2 mixer/reverb: compiled on every arm64 target. spu2.cpp
+# calls SPU2::RegisterNEONBackend() under `#if defined(__aarch64__) ||
+# defined(_M_ARM64)` (all arm64 builds, not just mobile), so the definition in
+# spu2_neon.cpp must be built wherever that guard is live — otherwise desktop
+# arm64 (macOS/Windows arm64) link with an undefined symbol. The file itself is
+# self-gated by the same arm64 macro and compiles to nothing on x86. ANDROID /
+# ARMSX2_IOS are kept as belt-and-suspenders so the mobile targets that already
+# built this file keep doing so regardless of how they set ARCH_ARM64.
+if(ARCH_ARM64 OR ANDROID OR ARMSX2_IOS)
+	list(APPEND pcsx2SPU2Sources
+		SPU2/spu2_neon.cpp)
+	list(APPEND pcsx2SPU2Headers
+		SPU2/spu2_neon.h
+		SPU2/spu2_neon_dcfilter.h
+		SPU2/spu2_neon_mixer.h
+		SPU2/spu2_neon_reverb_ex.h
+		SPU2/spu2_optimize.h
+		SPU2/spu2_sve2_fir.h
+		SPU2/spu2_mt6899_tuning.h)
+endif()
+
+if(ANDROID)
+	list(APPEND pcsx2HostSources
+		Host/OboeAudioStream.cpp)
+	list(APPEND pcsx2GSSources
+		GS/Renderers/OpenGL/GLContextEGL.cpp
+		GS/Renderers/OpenGL/GLContextEGLAndroid.cpp
+		GS/Renderers/Common/GSGPUProfile.cpp
+		GS/Renderers/Common/GSGPUProfileMali.cpp
+		GS/Renderers/Common/GSGPUProfileAdreno.cpp
+		GS/Renderers/Common/GSGPUProfilePowerVR.cpp)
+	list(APPEND pcsx2GSHeaders
+		GS/Renderers/OpenGL/GLContextEGL.h
+		GS/Renderers/OpenGL/GLContextEGLAndroid.h
+		GS/Renderers/Common/GSGPUProfile.h
+		GS/Renderers/Common/GSGPUProfilePrivate.h)
+	list(APPEND pcsx2Sources
+		Android/AndroidStubs.cpp
+		Android/AndroidPcapStubs.cpp
+		VU1Fingerprint.cpp
+		EEDiffVerify.cpp)
+	list(APPEND pcsx2Headers
+		VU1Fingerprint.h
+		EEDiffVerify.h
+		AndroidEEOpHist.h
+		AndroidPerfBuckets.h
+		PS1DrvTrace.h)
+	# Oboe is the Android audio backend consumed by Host/OboeAudioStream.cpp.
+	# The `oboe` target (created in SearchForStuff.cmake) exports its `include/`
+	# dir as PUBLIC, so linking it into PCSX2_FLAGS propagates <oboe/Oboe.h> to
+	# the PCSX2 translation units. (android/log libs are already linked on the
+	# emucore target in the Android entry CMakeLists, so only oboe is needed here.)
+	target_link_libraries(PCSX2_FLAGS INTERFACE
+		oboe)
+endif()
+
+if(ARMSX2_IOS)
+	list(APPEND pcsx2Sources
+		MacOSStubs.cpp
+		QAProbe.cpp
+		TestHarness.cpp
+		# iOS has no libpcap, so pcap_io.cpp is excluded above; reuse the (platform-
+		# agnostic) Android stub to supply the PCAPAdapter definitions DEV9 references.
+		Android/AndroidPcapStubs.cpp)
+	list(APPEND pcsx2Headers
+		QAProbe.h
+		TestHarness.h
+		SifRingBuffer.h)
+endif()
 
 # These ones benefit a lot from LTO
 set(pcsx2LTOSources
@@ -1135,7 +1262,10 @@ endif()
 target_sources(PCSX2 PRIVATE ${pcsx2USBSources} ${pcsx2USBHeaders})
 
 if(APPLE OR BSD)
-	if(APPLE)
+	# Disc sources use IOKit, which doesn't exist on iOS.
+	if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+		# No disc support on iOS.
+	elseif(APPLE)
 		target_sources(PCSX2 PRIVATE
 			${pcsx2OSXSources})
 	else()
@@ -1163,6 +1293,7 @@ target_link_libraries(PCSX2_FLAGS INTERFACE
 	ZLIB::ZLIB
 	LZ4::LZ4
 	SoundTouch::SoundTouch
+	JPEG::JPEG
 	PNG::PNG
 	LZMA::LZMA
 	Zstd::Zstd
@@ -1196,7 +1327,12 @@ if(WIN32)
 		dwmapi.lib
 		OneCore.lib
 	)
-else()
+elseif(NOT ANDROID AND NOT IOS)
+	# Android and iOS have no system libpcap; DEV9 uses Android/AndroidPcapStubs.cpp
+	# instead, so they must NOT link PCAP::PCAP. iOS additionally skips
+	# find_package(PCAP) (SearchForStuff.cmake), so the PCAP::PCAP target doesn't
+	# exist and linking it fails at configure time (a bare else() here caught both
+	# and broke them).
 	target_link_libraries(PCSX2_FLAGS INTERFACE
 		PCAP::PCAP
 	)
@@ -1248,20 +1384,25 @@ fixup_file_properties(PCSX2)
 force_include_last(PCSX2_FLAGS "/(usr|local)/include/?$")
 
 if (APPLE)
-	find_library(APPKIT_LIBRARY AppKit)
-	find_library(IOKIT_LIBRARY IOKit)
-	find_library(METAL_LIBRARY Metal)
-	find_library(QUARTZCORE_LIBRARY QuartzCore)
-	find_library(AVFOUNDATION_LIBRARY AVFoundation)
-	find_library(COREMEDIA_LIBRARY CoreMedia)
-	target_link_libraries(PCSX2_FLAGS INTERFACE
-		${APPKIT_LIBRARY}
-		${IOKIT_LIBRARY}
-		${METAL_LIBRARY}
-		${QUARTZCORE_LIBRARY}
-		${AVFOUNDATION_LIBRARY}
-		${COREMEDIA_LIBRARY}
-	)
+	if(NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
+		# AppKit and IOKit are macOS-only; iOS links the rest at the app target.
+		find_library(APPKIT_LIBRARY AppKit)
+		find_library(IOKIT_LIBRARY IOKit)
+		find_library(METAL_LIBRARY Metal)
+		find_library(QUARTZCORE_LIBRARY QuartzCore)
+		find_library(AVFOUNDATION_LIBRARY AVFoundation)
+		find_library(COREMEDIA_LIBRARY CoreMedia)
+		target_link_libraries(PCSX2_FLAGS INTERFACE
+			${APPKIT_LIBRARY}
+			${IOKIT_LIBRARY}
+			${METAL_LIBRARY}
+			${QUARTZCORE_LIBRARY}
+			${AVFOUNDATION_LIBRARY}
+			${COREMEDIA_LIBRARY}
+		)
+	endif()
+	# Weak-link MetalFX so older OS versions still load; each use is @available-guarded.
+	target_link_options(PCSX2_FLAGS INTERFACE "SHELL:-weak_framework MetalFX")
 endif()
 
 set_property(GLOBAL PROPERTY PCSX2_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
@@ -1309,8 +1450,22 @@ function(setup_main_executable target)
 			install(FILES $<TARGET_PDB_FILE:${target}> DESTINATION ${CMAKE_SOURCE_DIR}/bin)
 		endif()
 
-		# Copy dependency libraries.
-		set(DEPS_BINDIR "${CMAKE_SOURCE_DIR}/deps/bin")
+		# Copy dependency libraries. Bundle the DLLs from the dependency prefix we
+		# actually built against -- deps/bin for the x64 build, deps-arm64/bin for
+		# the native arm64 build -- rather than assuming a fixed path, so we never
+		# ship wrong-arch DLLs. Fall back to deps/bin when no prefix was supplied.
+		# Normalize to forward slashes: CMAKE_PREFIX_PATH may arrive with native
+		# backslashes (e.g. %cd%\deps-arm64 from the Windows workflow), and a
+		# backslash path baked into the generated cmake_install.cmake string trips
+		# "Invalid character escape" (\a, \b, ...) at install time.
+		file(TO_CMAKE_PATH "${CMAKE_SOURCE_DIR}/deps/bin" DEPS_BINDIR)
+		foreach(_prefix IN LISTS CMAKE_PREFIX_PATH)
+			file(TO_CMAKE_PATH "${_prefix}" _prefix)
+			if(EXISTS "${_prefix}/bin")
+				set(DEPS_BINDIR "${_prefix}/bin")
+				break()
+			endif()
+		endforeach()
 		set(DEPS_TO_COPY freetype.dll harfbuzz.dll jpeg62.dll libpng16.dll libsharpyuv.dll libwebp.dll libwebpdemux.dll libwebpmux.dll lz4.dll SDL3.dll shaderc_shared.dll z.dll zstd.dll plutovg.dll plutosvg.dll ryml.dll)
 		set(DEPS_TO_COPY
 			$<IF:$<CONFIG:Debug>,kddockwidgets-qt6d.dll,kddockwidgets-qt6.dll>
@@ -1331,7 +1486,6 @@ function(setup_main_executable target)
 			install(FILES "${DEPS_BINDIR}/${SYMBOL_TO_COPY}" DESTINATION "${CMAKE_SOURCE_DIR}/bin" OPTIONAL)
 		endforeach()
 
-		set(AGILITY_DIR "${CMAKE_SOURCE_DIR}/deps/bin/D3D12")
 		set(AGILITY_DEPS_TO_COPY D3D12Core.dll d3d12SDKLayers.dll)
 		foreach(AGILITY_DEP_TO_COPY ${AGILITY_DEPS_TO_COPY})
 			install(FILES "${DEPS_BINDIR}/D3D12/${AGILITY_DEP_TO_COPY}" DESTINATION "${CMAKE_SOURCE_DIR}/bin/D3D12" OPTIONAL)
@@ -1398,12 +1552,12 @@ function(setup_main_executable target)
 			MACOSX_BUNDLE true
 			MACOSX_BUNDLE_INFO_PLIST "${PCSX2_SOURCE_DIR}/Resources/Info.plist.in"
 			XCODE_ATTRIBUTE_CODE_SIGN_ENTITLEMENTS "${PCSX2_SOURCE_DIR}/Resources/PCSX2.entitlements"
-			OUTPUT_NAME PCSX2
+			OUTPUT_NAME ARMSX2
 			# Fixes complaints when Xcode tries to sign for running locally about MoltenVK not being signed
 			XCODE_ATTRIBUTE_OTHER_CODE_SIGN_FLAGS --deep
 		)
 
-		pcsx2_resource(${target} ${PCSX2_SOURCE_DIR}/Resources/PCSX2.icns ${PCSX2_SOURCE_DIR}/Resources)
+		pcsx2_resource(${target} ${PCSX2_SOURCE_DIR}/Resources/ARMSX2.icns ${PCSX2_SOURCE_DIR}/Resources)
 
 		# Copy shaderc into the bundle
 		target_sources(${target} PRIVATE "${SHADERC_LIBRARY}")

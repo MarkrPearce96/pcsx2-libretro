@@ -78,8 +78,12 @@ mark_as_advanced(CMAKE_C_FLAGS_DEVEL CMAKE_CXX_FLAGS_DEVEL CMAKE_LINKER_FLAGS_DE
 #-------------------------------------------------------------------------------
 # Select the architecture
 #-------------------------------------------------------------------------------
-if("${CMAKE_HOST_SYSTEM_PROCESSOR}" STREQUAL "x86_64" OR "${CMAKE_HOST_SYSTEM_PROCESSOR}" STREQUAL "amd64" OR
-   "${CMAKE_HOST_SYSTEM_PROCESSOR}" STREQUAL "AMD64" OR "${CMAKE_OSX_ARCHITECTURES}" STREQUAL "x86_64")
+# Detection keys off the *target* processor (CMAKE_SYSTEM_PROCESSOR), not the
+# host, so both native and cross builds select the right arch. The spelling
+# varies by toolchain (native MSVC reports "ARM64"/"AMD64"; other toolchains use
+# lowercase "arm64"/"aarch64"), so each branch matches all the casings.
+if("${CMAKE_SYSTEM_PROCESSOR}" STREQUAL "x86_64" OR "${CMAKE_SYSTEM_PROCESSOR}" STREQUAL "amd64" OR
+   "${CMAKE_SYSTEM_PROCESSOR}" STREQUAL "AMD64" OR "${CMAKE_OSX_ARCHITECTURES}" STREQUAL "x86_64")
 	# Multi-ISA only exists on x86.
 	option(DISABLE_ADVANCE_SIMD "Disable advance use of SIMD (SSE2+ & AVX)" OFF)
 
@@ -104,40 +108,23 @@ if("${CMAKE_HOST_SYSTEM_PROCESSOR}" STREQUAL "x86_64" OR "${CMAKE_HOST_SYSTEM_PR
 		if (DISABLE_ADVANCE_SIMD)
 			add_compile_options("-msse" "-msse2" "-msse4.1" "-mfxsr")
 		else()
-			# Can't use march=native on Apple Silicon — clang resolves it
-			# to -mcpu=apple-mX at compile time, which the x86_64 backend
-			# rejects (e.g. "unknown target CPU 'apple-m4'"). Probing
-			# CMAKE_HOST_SYSTEM_PROCESSOR is unreliable here: when cmake
-			# configure runs from a Rosetta shell, it sees x86_64 even
-			# though the physical CPU is arm64 — so use sysctl on macOS
-			# to read hw.optional.arm64 directly.
-			set(_SKIP_MARCH_NATIVE FALSE)
-			if(APPLE)
-				execute_process(
-					COMMAND sysctl -n hw.optional.arm64
-					OUTPUT_VARIABLE _APPLE_HW_ARM64
-					OUTPUT_STRIP_TRAILING_WHITESPACE
-					ERROR_QUIET)
-				if(_APPLE_HW_ARM64 STREQUAL "1")
-					set(_SKIP_MARCH_NATIVE TRUE)
-				endif()
-			elseif(NOT "${CMAKE_HOST_SYSTEM_PROCESSOR}" STREQUAL "x86_64")
-				set(_SKIP_MARCH_NATIVE TRUE)
-			endif()
-			if(NOT _SKIP_MARCH_NATIVE)
+			# Can't use march=native on Apple Silicon.
+			if(NOT APPLE OR "${CMAKE_HOST_SYSTEM_PROCESSOR}" STREQUAL "x86_64")
 				add_compile_options("-march=native")
 			endif()
 		endif()
 	endif()
-elseif("${CMAKE_HOST_SYSTEM_PROCESSOR}" STREQUAL "arm64" OR "${CMAKE_HOST_SYSTEM_PROCESSOR}" STREQUAL "aarch64" OR
+elseif("${CMAKE_SYSTEM_PROCESSOR}" STREQUAL "arm64" OR "${CMAKE_SYSTEM_PROCESSOR}" STREQUAL "ARM64" OR
+       "${CMAKE_SYSTEM_PROCESSOR}" STREQUAL "aarch64" OR "${CMAKE_SYSTEM_PROCESSOR}" STREQUAL "AARCH64" OR
        "${CMAKE_OSX_ARCHITECTURES}" STREQUAL "arm64")
-	message(STATUS "Building for Apple Silicon (ARM64).")
+	message(STATUS "Building for ARM64.")
 	set(ARCH_ARM64 TRUE)
 	if(APPLE)
 		# Min spec is an M1
 		add_compile_options("-march=armv8.4-a" "-mcpu=apple-m1")
-	else()
-		# Require atomic rmw instructions
+	elseif(NOT MSVC)
+		# Require atomic rmw instructions. MSVC (and clang-cl) reject -march;
+		# their arm64 baseline already includes what we need.
 		add_compile_options("-march=armv8.1-a")
 	endif()
 
@@ -150,14 +137,21 @@ elseif("${CMAKE_HOST_SYSTEM_PROCESSOR}" STREQUAL "arm64" OR "${CMAKE_HOST_SYSTEM
 		list(APPEND PCSX2_DEFS OVERRIDE_HOST_CACHE_LINE_SIZE=${HOST_CACHE_LINE_SIZE})
 	endif()
 	
-	# Windows page/cache line size seems to match x68-64 
+	# Windows page size matches x86-64 (4K).
 	if(WIN32)
 		list(APPEND PCSX2_DEFS OVERRIDE_HOST_PAGE_SIZE=0x1000)
-		# Value of std::hardware_destructive_interference_size for ARM64 on MSVC toolset 14.40.33807
-		list(APPEND PCSX2_DEFS OVERRIDE_HOST_CACHE_LINE_SIZE=64)
+		# Ship a single unified binary that is optimal on both 64- and 128-byte
+		# cache line machines. Cache line size is only used for alignas() on hot
+		# cross-thread structures to avoid false sharing, so over-aligning is a
+		# strict superset: 128-aligned data is also 64-aligned, avoiding false
+		# sharing on 64-byte hosts too, at the cost of a few padding bytes.
+		# Compiling with the smaller value (64) would instead cause real false
+		# sharing when run on a 128-byte host (e.g. Windows-on-ARM in an Apple
+		# Silicon VM), so we always target the larger line size here.
+		list(APPEND PCSX2_DEFS OVERRIDE_HOST_CACHE_LINE_SIZE=128)
 	endif()
 else()
-	message(FATAL_ERROR "Unsupported architecture: ${CMAKE_HOST_SYSTEM_PROCESSOR}")
+	message(FATAL_ERROR "Unsupported architecture: ${CMAKE_SYSTEM_PROCESSOR}")
 endif()
 
 # Require C++20.
@@ -170,8 +164,10 @@ if(MSVC AND NOT USE_CLANG_CL)
 		"$<$<COMPILE_LANGUAGE:CXX>:/Zc:__cplusplus>"
 		"$<$<COMPILE_LANGUAGE:CXX>:/permissive->"
 		"$<$<COMPILE_LANGUAGE:CXX>:/Zc:preprocessor>"
-		"/Zo"
-		"/utf-8"
+		# C/C++ codegen flags only: the armasm64 assembler (ASM_MARMASM, used for
+		# the arm64 FastJmp) rejects /Zo and doesn't want /utf-8.
+		"$<$<COMPILE_LANGUAGE:C,CXX>:/Zo>"
+		"$<$<COMPILE_LANGUAGE:C,CXX>:/utf-8>"
 	)
 endif()
 
@@ -217,9 +213,9 @@ if(LINUX)
 endif()
 
 if(MSVC)
-	# Enable PDB generation in release builds
+	# Enable PDB generation in release builds (C/C++ only; armasm64 doesn't take /Zi)
 	add_compile_options(
-		$<${CONFIG_REL_NO_DEB}:/Zi>
+		$<$<AND:${CONFIG_REL_NO_DEB},$<COMPILE_LANGUAGE:C,CXX>>:/Zi>
 	)
 	add_link_options(
 		$<${CONFIG_REL_NO_DEB}:/DEBUG>

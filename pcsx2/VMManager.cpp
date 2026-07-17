@@ -76,6 +76,7 @@
 #endif
 
 #ifdef __APPLE__
+#include <TargetConditionals.h>
 #include "common/Darwin/DarwinMisc.h"
 #endif
 
@@ -419,6 +420,18 @@ bool VMManager::Internal::CPUThreadInitialize()
 	// This also sorts out input sources.
 	LoadSettings();
 
+	// LoadSettings() re-reads EnableFastmem from the INI, clobbering the runtime
+	// disable that vtlb_Core_Alloc applied when the 4 GB fastmem area failed to
+	// allocate on low-VA devices (e.g. iPhone SE 2). Re-apply the disable from
+	// the sticky flag so the EE recompiler does not emit fastmem load/store
+	// against a null base. The flag is process-lifetime: once the area fails,
+	// it stays failed.
+	if (vtlb_FastmemAreaUnavailable() && EmuConfig.Cpu.Recompiler.EnableFastmem)
+	{
+		EmuConfig.Cpu.Recompiler.EnableFastmem = false;
+		Console.Warning("Fastmem re-disabled after settings reload (area allocation previously failed)");
+	}
+
 	if (EmuConfig.Achievements.Enabled)
 		Achievements::Initialize();
 
@@ -464,6 +477,17 @@ void VMManager::Internal::CPUThreadShutdown()
 	Log::SetFileOutputLevel(LOGLEVEL_NONE, std::string());
 
 	R5900SymbolImporter.ShutdownWorkerThread();
+}
+
+u64 VMManager::Internal::GetPerformanceClusterAffinityMask()
+{
+	// TODO(android-monorepo): full impl (in the known-good core) unions the CPU
+	// clusters of the EE/VU/GS target processors via ClusterAffinityMaskForOSId(),
+	// which isn't ported into this core yet. Returning 0 leaves adjacent helper
+	// threads (Oboe audio callback) on the kernel's default affinity — correct,
+	// just not big-cluster-pinned. Wire up when the thread-affinity subsystem is
+	// reconciled.
+	return 0;
 }
 
 void VMManager::Internal::SetFileLogPath(std::string path)
@@ -665,6 +689,12 @@ void VMManager::LoadCoreSettings(SettingsInterface& si)
 	// Force MTVU off when playing back GS dumps, it doesn't get used.
 	if (GSDumpReplayer::IsReplayingDump())
 		EmuConfig.Speedhacks.vuThread = false;
+
+	// DEBUG (ARM64): the microVU1-vs-interpreter shadow differential needs VU1 to run
+	// synchronously on the CPU thread, so force MTVU off when MVU_DIFF is set.
+	static const bool s_mvu_diff_env = (std::getenv("MVU_DIFF") != nullptr);
+	if (s_mvu_diff_env)
+		EmuConfig.Speedhacks.vuThread = false;
 }
 
 void VMManager::LoadInputBindings(SettingsInterface& si, std::unique_lock<std::mutex>& lock)
@@ -717,8 +747,13 @@ void VMManager::WarnAboutUnconfiguredController()
 	if (!si || HasAnyBindingsForPad(*si, 0))
 		return;
 
+	// Android and iOS inject pad state directly through the platform bridge,
+	// bypassing InputManager bindings, so this warning is always a false
+	// positive on mobile. Desktop platforms keep it.
+#if !defined(__ANDROID__) && !(defined(__APPLE__) && TARGET_OS_IPHONE)
 	Host::AddIconOSDMessage("ControllerNotConfigured", ICON_FA_GAMEPAD,
 		TRANSLATE_STR("VMManager", "Controller 1 has no input bindings configured."), Host::OSD_WARNING_DURATION);
+#endif
 }
 
 void VMManager::ApplyGameFixes()
@@ -763,6 +798,9 @@ void VMManager::ApplySettings()
 	EmuConfig = Pcsx2Config();
 	EmuConfig.CopyRuntimeConfig(old_config);
 	LoadSettings();
+	// Re-apply the sticky fastmem-area-unavailable disable (see CPUThreadInitialize).
+	if (vtlb_FastmemAreaUnavailable() && EmuConfig.Cpu.Recompiler.EnableFastmem)
+		EmuConfig.Cpu.Recompiler.EnableFastmem = false;
 	CheckForConfigChanges(old_config);
 }
 
@@ -1854,7 +1892,9 @@ std::string VMManager::GetSaveStateFileName(const char* game_serial, u32 game_cr
 	std::string filename;
 	if (std::strlen(game_serial) > 0)
 	{
-		if (slot < 0)
+		if (slot == SAVESTATE_SLOT_AUTOSAVE)
+			filename = fmt::format("{} ({:08X}).autosave.p2s", game_serial, game_crc);
+		else if (slot < 0)
 			filename = fmt::format("{} ({:08X}).resume.p2s", game_serial, game_crc);
 		else if (backup)
 			filename = fmt::format("{} ({:08X}).{:02d}.p2s.backup", game_serial, game_crc, slot);
@@ -1983,6 +2023,18 @@ void VMManager::ZipSaveState(std::unique_ptr<ArchiveEntryList> elist,
 		Host::AddIconOSDMessage(fmt::format("SaveStateSlot{}", slot_for_message), ICON_FA_FLOPPY_DISK,
 			fmt::format(TRANSLATE_FS("VMManager", "Saved state to slot {}."), slot_for_message),
 			Host::OSD_QUICK_DURATION);
+	}
+	else if (slot_for_message < 0)
+	{
+		// Autosave / resume slots (negative, e.g. SAVESTATE_SLOT_AUTOSAVE = -2)
+		// get no "Saved to slot N" toast, but SaveStateToSlot posted a keyed
+		// "Saving state to slot N..." progress message under this same key. The
+		// completion callback only fires on error, so on success that keyed
+		// message is never cleared — it lingers for its full 60s duration AND
+		// survives VM shutdown, so it reappears stuck in the corner the next time
+		// you boot a game (the "Save State And Exit then it's stuck saving on the
+		// next boot" symptom). Clear it explicitly here.
+		Host::RemoveKeyedOSDMessage(fmt::format("SaveStateSlot{}", slot_for_message));
 	}
 
 	DevCon.WriteLn("Zipping save state to '%s' took %.2f ms", filename, timer.GetTimeMilliseconds());
@@ -2667,10 +2719,16 @@ void VMManager::InitializeCPUProviders()
 	CpuMicroVU0.Reserve();
 	CpuMicroVU1.Reserve();
 #else
-	// Despite not having any VU recompilers on ARM64, therefore no MTVU,
-	// we still need the thread alive. Otherwise the read and write positions
-	// of the ring buffer wont match, and various systems in the emulator end up deadlocked.
-	vu1Thread.Open();
+	// ARM64 (Phase 1.5): reserve the EE recompiler so its code cache + constant pool
+	// are set up. (Phase 6) the IOP recompiler is now ported, so reserve it too.
+	// (Phase 7.8) the VU recompilers (microVU0/1) are now ported — reserve them as well.
+	// recMicroVU1::Reserve() opens vu1Thread for us (mirrors x86 microVU.cpp), so we no
+	// longer open it explicitly here.
+	recCpu.Reserve();
+	psxRec.Reserve();
+
+	CpuMicroVU0.Reserve();
+	CpuMicroVU1.Reserve();
 #endif
 
 	VifUnpackSSE_Init();
@@ -2691,10 +2749,13 @@ void VMManager::ShutdownCPUProviders()
 	psxRec.Shutdown();
 	recCpu.Shutdown();
 #else
-	// See the comment in the InitializeCPUProviders for an explaination why we
-	// still need to manage the MTVU thread.
-	if (vu1Thread.IsOpen())
-		vu1Thread.WaitVU();
+	// ARM64 (Phase 1.5 / Phase 6 / Phase 7.8): tear down the VU + IOP + EE recompilers
+	// reserved above. recMicroVU1::Shutdown() waits on / closes vu1Thread for us.
+	CpuMicroVU1.Shutdown();
+	CpuMicroVU0.Shutdown();
+
+	psxRec.Shutdown();
+	recCpu.Shutdown();
 #endif
 }
 
@@ -2716,11 +2777,16 @@ void VMManager::UpdateCPUImplementations()
 	CpuVU0 = EmuConfig.Cpu.Recompiler.EnableVU0 ? static_cast<BaseVUmicroCPU*>(&CpuMicroVU0) : static_cast<BaseVUmicroCPU*>(&CpuIntVU0);
 	CpuVU1 = EmuConfig.Cpu.Recompiler.EnableVU1 ? static_cast<BaseVUmicroCPU*>(&CpuMicroVU1) : static_cast<BaseVUmicroCPU*>(&CpuIntVU1);
 #else
-	Cpu = &intCpu;
-	psxCpu = &psxInt;
+	// ARM64 (Phase 4.3): the EE recompiler is now functional, so select it when the
+	// EE rec is enabled (it falls back to the interpreter per-opcode for anything it
+	// can't compile yet). (Phase 6) the IOP recompiler is functional too — same
+	// per-opcode interpreter fallback model. (Phase 7.8) microVU0/1 are now ported, so
+	// select them when the VU recs are enabled (mirrors the x86 path).
+	Cpu = CHECK_EEREC ? &recCpu : &intCpu;
+	psxCpu = CHECK_IOPREC ? &psxRec : &psxInt;
 
-	CpuVU0 = &CpuIntVU0;
-	CpuVU1 = &CpuIntVU1;
+	CpuVU0 = EmuConfig.Cpu.Recompiler.EnableVU0 ? static_cast<BaseVUmicroCPU*>(&CpuMicroVU0) : static_cast<BaseVUmicroCPU*>(&CpuIntVU0);
+	CpuVU1 = EmuConfig.Cpu.Recompiler.EnableVU1 ? static_cast<BaseVUmicroCPU*>(&CpuMicroVU1) : static_cast<BaseVUmicroCPU*>(&CpuIntVU1);
 #endif
 }
 
@@ -2731,6 +2797,18 @@ void VMManager::Internal::ClearCPUExecutionCaches()
 
 #ifdef _M_X86 // TODO(Stenzek): Remove me once EE/VU/IOP recs are added.
 	// mVU's VU0 needs to be properly initialized for macro mode even if it's not used for micro mode!
+	if (CHECK_EEREC && !EmuConfig.Cpu.Recompiler.EnableVU0)
+		CpuMicroVU0.Reset();
+#else
+	// ARM64 (Phase 1.5 / Phase 6): reset the EE + IOP rec code caches/constant pools
+	// even when not the active provider, so their emit cursors start clean on each VM
+	// reset (Cpu->Reset()/psxCpu->Reset() above only reset the interpreters when the
+	// recs aren't selected).
+	recCpu.Reset();
+	psxRec.Reset();
+
+	// (Phase 7.8) mVU's VU0 needs to be properly initialized for macro mode even if it's
+	// not used for micro mode (mirrors the x86 branch above).
 	if (CHECK_EEREC && !EmuConfig.Cpu.Recompiler.EnableVU0)
 		CpuMicroVU0.Reset();
 #endif
@@ -3314,6 +3392,9 @@ void VMManager::WarnAboutUnsafeSettings()
 			append(ICON_FA_TV,
 				TRANSLATE_SV("VMManager", "Integer scaling is enabled. This may shrink the image."));
 		}
+#if !(defined(__APPLE__) && TARGET_OS_IPHONE)
+		// iOS always renders with Metal; "Automatic" is not a meaningful choice
+		// there, so this desktop-only warning is a false positive and is omitted.
 		static bool render_change_warn = false;
 		if (EmuConfig.GS.Renderer != GSRendererType::Auto && EmuConfig.GS.Renderer != GSRendererType::SW && !render_change_warn)
 		{
@@ -3323,6 +3404,7 @@ void VMManager::WarnAboutUnsafeSettings()
 			append(ICON_FA_CIRCLE_EXCLAMATION,
 				TRANSLATE_SV("VMManager", "Graphics API is not set to Automatic. This may cause performance problems and graphical issues."));
 		}
+#endif
 	}
 	if (EmuConfig.GS.DumpGSData)
 	{
@@ -3668,11 +3750,31 @@ void VMManager::EnsureCPUInfoInitialized()
 
 void VMManager::SetEmuThreadAffinities()
 {
+#if defined(__ANDROID__)
+	// Android: never hard-pin the emu threads to fixed cores. Under Android's EAS
+	// scheduler the busiest thread (VU1 sits at ~99% in VU-bound titles like GoW2)
+	// is placed on the highest-capacity core — the prime (Cortex-X3). The desktop
+	// pinning path (used when a stale EnableThreadPinning=1 is in the ini) instead
+	// hands the prime to EE via s_processor_list[0] and locks VU onto a mid-tier big
+	// core (measured: VU pinned to an A7xx runs ~1.4x slower than floating to the X3,
+	// which slams GoW2). cpuinfo also can't read per-core frequency on many Android
+	// devices (all clusters report 0 MHz), so the frequency-ordered pin is unreliable
+	// anyway. Release any affinity so the scheduler can use the prime for VU.
+	MTGS::GetThreadHandle().SetAffinity(0);
+	vu1Thread.GetThreadHandle().SetAffinity(0);
+	s_vm_thread_handle.SetAffinity(0);
+	s_software_renderer_processor_list = {};
+	s_thread_affinities_set = false;
+	return;
+#else
 	const bool new_pin_enable = (GetState() != VMState::Shutdown && EmuConfig.EnableThreadPinning);
 	if (s_thread_affinities_set == new_pin_enable)
 		return;
 
-	s_thread_affinities_set = EmuConfig.EnableThreadPinning;
+	// Track whether pinning is *currently effective*, not just EmuConfig.EnableThreadPinning
+	// (matches refresh-experimental — a shutdown call with pinning enabled must not leave this
+	// flag true while the affinity + SW-renderer proc list get cleared).
+	s_thread_affinities_set = new_pin_enable;
 
 	EnsureCPUInfoInitialized();
 
@@ -3720,6 +3822,16 @@ void VMManager::SetEmuThreadAffinities()
 	INFO_LOG("  GS thread is on processor {} (0x{:x})", gs_index, gs_affinity);
 	MTGS::GetThreadHandle().SetAffinity(gs_affinity);
 
+#ifdef __ANDROID__
+	// Bump the emu-critical threads slightly above default so Android's
+	// scheduler favors them over app/UI housekeeping under load. EPERM is
+	// tolerated inside SetNicePriority (rlimit may forbid negative nice).
+	s_vm_thread_handle.SetNicePriority(-1);
+	if (EmuConfig.Speedhacks.vuThread)
+		vu1Thread.GetThreadHandle().SetNicePriority(-1);
+	MTGS::GetThreadHandle().SetNicePriority(-1);
+#endif
+
 	// Try to find some threads for the software renderer.
 	// They should be in the same cluster as the main GS thread. If they're not, for example,
 	// we had 4 P cores and 6 E cores, let the OS schedule them instead.
@@ -3738,12 +3850,46 @@ void VMManager::SetEmuThreadAffinities()
 
 		s_software_renderer_processor_list.push_back(proc_index);
 	}
+#endif // __ANDROID__ (else branch of the top-level guard)
 }
 
 const std::vector<u32>& VMManager::Internal::GetSoftwareRendererProcessorList()
 {
 	EnsureCPUInfoInitialized();
 	return s_software_renderer_processor_list;
+}
+
+std::string VMManager::Internal::GetThreadPlacementDebug()
+{
+	const auto describe = [](const char* name, const Threading::ThreadHandle& h) {
+		const int cpu = h.GetCurrentCpu();
+		const u64 mask = h.GetAffinity();
+		return fmt::format("{}=c{}/m{:x}", name, cpu, mask);
+	};
+
+	std::string out = describe("EE", s_vm_thread_handle);
+	out += ' ';
+	out += describe("VU", vu1Thread.GetThreadHandle());
+	out += ' ';
+	out += describe("GS", MTGS::GetThreadHandle());
+
+#if defined(__linux__) || defined(_WIN32)
+	if (cpuinfo_initialize())
+	{
+		const u32 clusters = cpuinfo_get_clusters_count();
+		out += " |";
+		for (u32 i = 0; i < clusters; i++)
+		{
+			const cpuinfo_cluster* cl = cpuinfo_get_cluster(i);
+			if (!cl)
+				continue;
+			// cpuinfo frequency is in Hz; show MHz (0 = cpuinfo couldn't read sysfs cpufreq).
+			out += fmt::format(" {}x{}MHz", cl->processor_count, static_cast<u32>(cl->frequency / 1000000));
+		}
+	}
+#endif
+
+	return out;
 }
 
 void VMManager::ReloadPINE()

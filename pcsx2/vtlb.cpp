@@ -24,6 +24,10 @@
 #include "Host.h"
 #include "VMManager.h"
 
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
+
 #include "common/BitUtils.h"
 #include "common/Error.h"
 
@@ -32,6 +36,7 @@
 #include "GS/GSVector.h"
 
 #include <bit>
+#include <cstdlib>
 #include <map>
 #include <unordered_set>
 #include <unordered_map>
@@ -84,6 +89,12 @@ static std::vector<u32> s_fastmem_virtual_mapping; // maps vaddr -> mainmem offs
 static std::unordered_multimap<u32, u32> s_fastmem_physical_mapping; // maps mainmem offset -> vaddr
 static std::unordered_map<uptr, LoadstoreBackpatchInfo> s_fastmem_backpatch_info;
 static std::unordered_set<u32> s_fastmem_faulting_pcs;
+
+// Sticky: the 4 GB fastmem area allocation failed on this device at least once.
+// Process-lifetime flag so LoadSettings's config reload can't silently re-enable
+// fastmem against a null base and crash the EE rec on its first load/store.
+static bool s_fastmem_area_unavailable = false;
+bool vtlb_FastmemAreaUnavailable() { return s_fastmem_area_unavailable; }
 
 vtlb_private::VTLBPhysical vtlb_private::VTLBPhysical::fromPointer(sptr ptr)
 {
@@ -922,6 +933,11 @@ static bool vtlb_GetMainMemoryOffset(u32 paddr, u32* mainmem_offset, u32* mainme
 
 static void vtlb_CreateFastmemMapping(u32 vaddr, u32 mainmem_offset, const PageProtectionMode& mode)
 {
+	// Bail if the fastmem area was never allocated (e.g. 4 GB reservation
+	// failed on a low-memory iOS device). Mirrors vtlb_RemoveFastmemMappings.
+	if (s_fastmem_virtual_mapping.empty())
+		return;
+
 	FASTMEM_LOG("Create fastmem mapping @ vaddr %08X mainmem %08X", vaddr, mainmem_offset);
 
 	const u32 page = vaddr / VTLB_PAGE_SIZE;
@@ -995,6 +1011,13 @@ static void vtlb_RemoveFastmemMapping(u32 vaddr)
 
 static void vtlb_RemoveFastmemMappings(u32 vaddr, u32 size)
 {
+	// When the 4 GB fastmem area reservation fails (e.g. on low-memory iOS
+	// devices like the iPhone SE 2), s_fastmem_virtual_mapping is never
+	// resized and remains empty. Indexing it would dereference NULL, so bail
+	// out early — there are no mappings to remove.
+	if (s_fastmem_virtual_mapping.empty())
+		return;
+
 	pxAssert((vaddr & VTLB_PAGE_MASK) == 0);
 	pxAssert(size > 0 && (size & VTLB_PAGE_MASK) == 0);
 
@@ -1299,6 +1322,11 @@ void vtlb_ResetFastmem()
 	if (!CHECK_FASTMEM || !CHECK_EEREC || !vtlbdata.vmap)
 		return;
 
+	// If the reservation failed at boot, fastmem is permanently unavailable --
+	// don't let a config change resurrect it.
+	if (s_fastmem_area_unavailable)
+		return;
+
 	// we need to go through and look at the vtlb pointers, to remap the host area
 	for (size_t i = 0; i < VTLB_VMAP_ITEMS; i++)
 	{
@@ -1335,14 +1363,43 @@ bool vtlb_Core_Alloc()
 	s_fastmem_area = SharedMemoryMappingArea::Create(FASTMEM_AREA_SIZE);
 	if (!s_fastmem_area)
 	{
+		// 4 GB virtual reservation can fail on devices with limited VA space
+		// (e.g. iPhone SE 2 with 4 GB RAM under LiveContainer). On iOS we
+		// continue without fastmem instead of aborting boot.
+#if TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR
+		Console.Warning("Fastmem disabled: 4 GB virtual-address reservation failed; continuing without fastmem");
+		vtlbdata.fastmem_base = 0;
+		EmuConfig.Cpu.Recompiler.EnableFastmem = false;
+		s_fastmem_area_unavailable = true;
+#else
 		Host::ReportErrorAsync("Error", "Failed to allocate fastmem area");
 		return false;
+#endif
 	}
 
-	s_fastmem_virtual_mapping.resize(FASTMEM_PAGE_COUNT, NO_FASTMEM_MAPPING);
-	vtlbdata.fastmem_base = (uptr)s_fastmem_area->BasePointer();
-	DevCon.WriteLn(Color_StrongGreen, "Fastmem area: %p - %p",
-		vtlbdata.fastmem_base, vtlbdata.fastmem_base + (FASTMEM_AREA_SIZE - 1));
+	// Force-disable fastmem if explicitly requested via env var or INI.
+	if (s_fastmem_area)
+	{
+		const char* env = std::getenv("iPSX2_FORCE_NO_FASTMEM");
+		const bool env_force = env && std::atoi(env) == 1;
+		const bool ini_disabled = !EmuConfig.Cpu.Recompiler.EnableFastmem;
+		if (env_force || ini_disabled)
+		{
+			Console.Warning("Fastmem disabled (env=%d ini=%d); releasing fastmem area",
+				(int)env_force, (int)ini_disabled);
+			s_fastmem_area.reset();
+			vtlbdata.fastmem_base = 0;
+			EmuConfig.Cpu.Recompiler.EnableFastmem = false;
+		}
+	}
+
+	if (s_fastmem_area)
+	{
+		s_fastmem_virtual_mapping.resize(FASTMEM_PAGE_COUNT, NO_FASTMEM_MAPPING);
+		vtlbdata.fastmem_base = (uptr)s_fastmem_area->BasePointer();
+		DevCon.WriteLn(Color_StrongGreen, "Fastmem area: %p - %p",
+			vtlbdata.fastmem_base, vtlbdata.fastmem_base + (FASTMEM_AREA_SIZE - 1));
+	}
 
 	Error error;
 	if (!PageFaultHandler::Install(&error))

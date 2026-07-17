@@ -1,8 +1,11 @@
 // SPDX-FileCopyrightText: 2002-2026 PCSX2 Dev Team
+// SPDX-FileCopyrightText: 2026 isztld <https://isztld.com/>
 // SPDX-License-Identifier: GPL-3.0
 
 #include "arm64/Vif_UnpackNEON.h"
 #include "arm64/AsmHelpers.h"
+#include "AndroidPerfBuckets.h"
+#include "AndroidPerfBuckets.h"
 #include "MTVU.h"
 
 #include "common/Assertions.h"
