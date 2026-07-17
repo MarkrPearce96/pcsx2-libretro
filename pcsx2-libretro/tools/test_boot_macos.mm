@@ -25,6 +25,7 @@
 #import <ImageIO/ImageIO.h>
 
 #include <dlfcn.h>
+#include <atomic>
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
@@ -41,6 +42,36 @@ NSWindow* g_window = nil;
 NSView* g_view = nil;
 std::string g_system_dir;
 std::string g_save_dir;
+
+// Keyboard -> libretro joypad bits (RETRO_DEVICE_ID_JOYPAD_* bit index).
+// Set from AppKit key monitors on the main thread, read from the core's
+// input poll on the EE thread.
+std::atomic<uint32_t> g_buttons{0};
+
+// kVK_* keycode -> joypad id. Layout mirrors RetroArch's default binds:
+// arrows=dpad, Z=Cross X=Circle A=Square S=Triangle, Enter=Start,
+// Tab=Select, Q/W=L1/R1, 1/2=L2/R2.
+int JoypadIdForKeyCode(unsigned short keycode)
+{
+    switch (keycode)
+    {
+        case 126: return 4;  // up
+        case 125: return 5;  // down
+        case 123: return 6;  // left
+        case 124: return 7;  // right
+        case 6:   return 0;  // Z -> Cross (B)
+        case 7:   return 8;  // X -> Circle (A)
+        case 0:   return 1;  // A -> Square (Y)
+        case 1:   return 9;  // S -> Triangle (X)
+        case 36:  return 3;  // Return -> Start
+        case 48:  return 2;  // Tab -> Select
+        case 12:  return 10; // Q -> L1
+        case 13:  return 11; // W -> R1
+        case 18:  return 12; // 1 -> L2
+        case 19:  return 13; // 2 -> R2
+        default:  return -1;
+    }
+}
 
 void LogCb(enum retro_log_level level, const char* fmt, ...)
 {
@@ -97,7 +128,12 @@ void VideoCb(const void*, unsigned, unsigned, size_t) {}
 void AudioSampleCb(int16_t, int16_t) {}
 size_t AudioBatchCb(const int16_t*, size_t frames) { return frames; }
 void InputPollCb() {}
-int16_t InputStateCb(unsigned, unsigned, unsigned, unsigned) { return 0; }
+int16_t InputStateCb(unsigned port, unsigned device, unsigned, unsigned id)
+{
+    if (port == 0 && device == RETRO_DEVICE_JOYPAD && id < 16)
+        return (g_buttons.load(std::memory_order_relaxed) >> id) & 1;
+    return 0; // analog axes stay centered
+}
 
 void CaptureWindow(const std::string& path)
 {
@@ -142,6 +178,24 @@ int main(int argc, char** argv)
     [g_window setContentView:g_view];
     [g_window makeKeyAndOrderFront:nil];
     [NSApp activateIgnoringOtherApps:YES];
+
+    // Keyboard -> joypad. Local monitors only see events while our window
+    // is key; returning nil swallows handled keys (no system beep).
+    id (^keyHandler)(NSEvent*) = ^NSEvent*(NSEvent* ev) {
+        const int id_ = JoypadIdForKeyCode([ev keyCode]);
+        if (id_ < 0)
+            return ev;
+        if ([ev type] == NSEventTypeKeyDown)
+            g_buttons.fetch_or(1u << id_, std::memory_order_relaxed);
+        else
+            g_buttons.fetch_and(~(1u << id_), std::memory_order_relaxed);
+        return nil;
+    };
+    [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown handler:keyHandler];
+    [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyUp handler:keyHandler];
+    fprintf(stderr,
+        "[harness] keys: arrows=dpad Z=Cross X=Circle A=Square S=Triangle "
+        "Enter=Start Tab=Select Q/W=L1/R1 1/2=L2/R2\n");
 
     std::thread worker([=] {
         void* h = dlopen(core_path, RTLD_NOW | RTLD_LOCAL);
