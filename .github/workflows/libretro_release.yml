@@ -211,10 +211,8 @@ jobs:
           # (x86_64 brew, present on some runners) so the linker never sees
           # x86_64 libraries. IGNORE_PREFIX_PATH is needed as well as
           # IGNORE_PATH — find_package config-mode searches prefix roots.
-          # -mcpu=apple-m1: the runner's older clang defaults arm64 to a
-          # generic CPU without the 'aes' feature, breaking lzma's AesOpt.c
-          # ARM crypto intrinsics (newer local Xcodes enable it by default).
-          # apple-m1 is the true hardware floor — every Apple Silicon Mac.
+          # Crypto-extension handling for older runner clangs lives in
+          # cmake/BuildParameters.cmake (-march=armv8.4-a+aes+sha2).
           /opt/homebrew/bin/cmake -S . -B build-arm64 \
             -G Ninja \
             -DCMAKE_PREFIX_PATH="/opt/homebrew;/opt/homebrew/opt/qt@6" \
@@ -223,9 +221,7 @@ jobs:
             -DENABLE_LIBRETRO=ON \
             -DENABLE_QT_UI=OFF \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_OSX_ARCHITECTURES=arm64 \
-            -DCMAKE_C_FLAGS=-mcpu=apple-m1 \
-            -DCMAKE_CXX_FLAGS=-mcpu=apple-m1
+            -DCMAKE_OSX_ARCHITECTURES=arm64
 
       - name: Build pcsx2_libretro target
         run: |

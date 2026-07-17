@@ -120,8 +120,13 @@ elseif("${CMAKE_SYSTEM_PROCESSOR}" STREQUAL "arm64" OR "${CMAKE_SYSTEM_PROCESSOR
 	message(STATUS "Building for ARM64.")
 	set(ARCH_ARM64 TRUE)
 	if(APPLE)
-		# Min spec is an M1
-		add_compile_options("-march=armv8.4-a" "-mcpu=apple-m1")
+		# Min spec is an M1. +aes+sha2 must be EXPLICIT: older clangs (Xcode
+		# 15.x) give -march precedence over -mcpu for ISA features regardless
+		# of flag order, and plain armv8.4-a omits the optional crypto
+		# extensions — breaking lzma's AesOpt.c/Sha256Opt.c HW intrinsics.
+		# Newer clangs resolve -mcpu=apple-m1 (which implies them) last, which
+		# is why local builds never saw it.
+		add_compile_options("-march=armv8.4-a+aes+sha2" "-mcpu=apple-m1")
 	elseif(NOT MSVC)
 		# Require atomic rmw instructions. MSVC (and clang-cl) reject -march;
 		# their arm64 baseline already includes what we need.
