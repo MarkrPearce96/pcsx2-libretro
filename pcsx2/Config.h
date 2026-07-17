@@ -412,6 +412,12 @@ enum class GSCASMode : u8
 	SharpenAndResize,
 };
 
+enum class GSUpscaler : u8
+{
+	Off,           ///< Plain bilinear present-time stretch (default).
+	MetalFXSpatial, ///< Apple MetalFX spatial upscaler (Metal backend, macOS 13+).
+};
+
 enum class GSHWAutoFlushLevel : u8
 {
 	Disabled,
@@ -721,6 +727,7 @@ struct Pcsx2Config
 		static constexpr GSPostBilinearMode DEFAULT_BILINEAR_FILTERING_MODE = GSPostBilinearMode::BilinearSmooth;
 		static constexpr FMVAspectRatioSwitchType DEFAULT_FMV_ASPECT_RATIO = FMVAspectRatioSwitchType::Off;
 		static constexpr GSCASMode DEFAULT_CAS_MODE = GSCASMode::Disabled;
+		static constexpr GSUpscaler DEFAULT_UPSCALER = GSUpscaler::Off;
 
 		static constexpr float DEFAULT_UPSCALE_MULTIPLIER = 1.0f;
 		static constexpr AccBlendLevel DEFAULT_BLENDING_ACCURACY = AccBlendLevel::Basic;
@@ -764,6 +771,8 @@ struct Pcsx2Config
 					UseBlitSwapChain : 1,
 					DisableShaderCache : 1,
 					DisableFramebufferFetch : 1,
+					EnableAdrenoFramebufferFetch : 1,
+					ForceMaliFramebufferFetch : 1,
 					DisableVertexShaderExpand : 1,
 					SkipDuplicateFrames : 1,
 					OsdShowSpeed : 1,
@@ -870,6 +879,7 @@ struct Pcsx2Config
 		GSDumpCompressionMethod GSDumpCompression = GSDumpCompressionMethod::Zstandard;
 		GSHardwareDownloadMode HWDownloadMode = GSHardwareDownloadMode::Enabled;
 		GSCASMode CASMode = DEFAULT_CAS_MODE;
+		GSUpscaler Upscaler = DEFAULT_UPSCALER;
 		u8 Dithering = 2;
 		u8 MaxAnisotropy = 0;
 		u8 TVShader = 0;
@@ -895,6 +905,12 @@ struct Pcsx2Config
 		TriFiltering TriFilter = DEFAULT_TRILINEAR_FILTERING_MODE;
 		s8 OverrideTextureBarriers = -1;
 		GSDepthFeedbackMode DepthFeedbackMode = GSDepthFeedbackMode::Auto;
+
+		// RetroArch (.slangp) shader chain, applied at present after ShadeBoost/FXAA via
+		// librashader. Disabled or an empty preset skips the chain entirely (zero cost),
+		// and it's a no-op on renderers/builds without a librashader backend.
+		bool ShaderChainEnabled = false;
+		std::string ShaderChainPreset;
 
 		u8 CAS_Sharpness = 50;
 		u8 ShadeBoost_Brightness = DEFAULT_SHADEBOOST_BRIGHTNESS;
@@ -930,6 +946,7 @@ struct Pcsx2Config
 		int AudioCaptureBitrate = DEFAULT_AUDIO_CAPTURE_BITRATE;
 
 		std::string Adapter;
+		std::string AndroidGpuProfileOverride = "auto";
 		std::string HWDumpDirectory;
 		std::string SWDumpDirectory;
 
@@ -970,7 +987,11 @@ struct Pcsx2Config
 		};
 
 		static constexpr s32 MAX_VOLUME = 200;
+#ifdef __ANDROID__
+		static constexpr AudioBackend DEFAULT_BACKEND = AudioBackend::Oboe;
+#else
 		static constexpr AudioBackend DEFAULT_BACKEND = AudioBackend::Cubeb;
+#endif
 		static constexpr SPU2SyncMode DEFAULT_SYNC_MODE = SPU2SyncMode::TimeStretch;
 
 		static std::optional<SPU2SyncMode> ParseSyncMode(const char* str);
@@ -1489,13 +1510,12 @@ namespace EmuFolders
 
 // ------------ CPU / Recompiler Options ---------------
 
-#ifdef _M_X86 // TODO: Remove me once EE/VU/IOP recs are added.
+// (ARM64 Phase 7.8) microVU0/1 are now ported, so REC_VU1/THREAD_VU1 track the config
+// on both architectures — the old ARM64 hardcoded-false stub would make GetGSPacketSize
+// take its `!REC_VU1` path and return the XGKICK packet size with the bit31 EOP flag set,
+// which mVU_XGKICK_ then mis-reads as a multi-GB transfer (memcpy crash on the first kick).
 #define REC_VU1 (EmuConfig.Cpu.Recompiler.EnableVU1)
 #define THREAD_VU1 (REC_VU1 && EmuConfig.Speedhacks.vuThread)
-#else
-#define THREAD_VU1 false
-#define REC_VU1 false
-#endif
 #define INSTANT_VU1 (EmuConfig.Speedhacks.vu1Instant)
 #define CHECK_EEREC (EmuConfig.Cpu.Recompiler.EnableEE)
 #define CHECK_CACHE (EmuConfig.Cpu.Recompiler.EnableEECache)

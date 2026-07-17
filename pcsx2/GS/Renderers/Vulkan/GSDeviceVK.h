@@ -47,6 +47,7 @@ public:
 		bool vk_khr_shader_non_semantic_info : 1;
 		bool vk_ext_attachment_feedback_loop_layout : 1;
 		bool vk_ext_fragment_shader_interlock : 1;
+		bool vk_khr_push_descriptor : 1;
 	};
 
 	// Global state accessors
@@ -82,6 +83,28 @@ public:
 	/// Returns true if running on an AMD GPU.
 	__fi bool IsDeviceAMD() const { return (m_device_properties.vendorID == 0x1002); }
 
+	/// Returns true if running on a Broadcom V3D GPU (vendorID 0x14E4) — i.e. the
+	/// Raspberry Pi's VideoCore under Mesa's V3DV, reached via the Linux arm64 build.
+	__fi bool IsDeviceBroadcom() const { return (m_device_properties.vendorID == 0x14E4u); }
+
+	/// Returns true if running on an ARM Mali GPU (vendorID 0x13B5).
+	__fi bool IsDeviceMali() const { return (m_device_properties.vendorID == 0x13B5u); }
+
+	/// Returns true if running on a Qualcomm Adreno GPU (vendorID 0x5143).
+	__fi bool IsDeviceAdreno() const { return (m_device_properties.vendorID == 0x5143u); }
+
+	// Adreno-5xx / pre-0x801EA000 driver bug: colorWriteMask is ignored while a depth
+	// test is active (PPSSPP #10421). Cached in CheckFeatures, consumed in CreateTFXPipeline.
+	bool m_broken_colormask_with_depth = false;
+
+	/// Returns true if running on an Imagination PowerVR GPU (vendorID 0x1010).
+	__fi bool IsDevicePowerVR() const { return (m_device_properties.vendorID == 0x1010u); }
+
+	/// Returns true if running on a Samsung Xclipse (Exynos AMD-RDNA2) GPU.
+	/// NOTE: 0x144D (Samsung) is unverified across driver revisions — a real Xclipse tester
+	/// must confirm this fires; if it reports a different vendorID the gate is simply inert.
+	__fi bool IsDeviceXclipse() const { return (m_device_properties.vendorID == 0x144Du); }
+
 	// Creates a simple render pass.
 	VkRenderPass GetRenderPass(VkFormat color_format, VkFormat depth_format,
 		VkAttachmentLoadOp color_load_op = VK_ATTACHMENT_LOAD_OP_LOAD,
@@ -106,6 +129,14 @@ public:
 
 	/// Frees a descriptor set allocated from the global pool.
 	void FreePersistentDescriptorSet(VkDescriptorSet set);
+
+	/// True when the device uses VK_KHR_push_descriptor for texture binding (everything except Mali,
+	/// whose driver crashes inside vkCmdPushDescriptorSetKHR). When false, textures are bound via
+	/// per-frame allocated descriptor sets (vkUpdateDescriptorSets + vkCmdBindDescriptorSets).
+	__fi bool UsePushDescriptors() const { return m_use_push_descriptors; }
+
+	/// Allocates a descriptor set from the current frame's reset-per-frame pool (non-push path only).
+	VkDescriptorSet AllocateFrameDescriptorSet(VkDescriptorSetLayout set_layout);
 
 	// Gets the fence that will be signaled when the currently executing command buffer is
 	// queued and executed. Do not wait for this fence before the buffer is executed.
@@ -222,6 +253,9 @@ private:
 		// [0] - Init (upload) command buffer, [1] - draw command buffer
 		VkCommandPool command_pool = VK_NULL_HANDLE;
 		std::array<VkCommandBuffer, 2> command_buffers{VK_NULL_HANDLE, VK_NULL_HANDLE};
+		// Per-frame texture descriptor pool, reset wholesale each time the frame is reused.
+		// Only created/used on the non-push-descriptor path (Mali workaround).
+		VkDescriptorPool descriptor_pool = VK_NULL_HANDLE;
 		VkFence fence = VK_NULL_HANDLE;
 		u64 fence_counter = 0;
 		s32 spin_id = -1;
@@ -253,6 +287,13 @@ private:
 
 	VkDescriptorPool m_global_descriptor_pool = VK_NULL_HANDLE;
 
+	// Set false for Mali (vendorID 0x13B5) in CreateDevice: its driver crashes inside
+	// vkCmdPushDescriptorSetKHR, so texture binding falls back to per-frame descriptor sets.
+	bool m_use_push_descriptors = true;
+
+	// MediaTek-SoC detection now lives in the base GSDevice (SetMediaTekSoC/IsMediaTekSoC),
+	// so both backends and GS.cpp's Android GameDB overrides can read it.
+
 	VkQueue m_graphics_queue = VK_NULL_HANDLE;
 	VkQueue m_present_queue = VK_NULL_HANDLE;
 	u32 m_graphics_queue_family_index = 0;
@@ -283,13 +324,13 @@ private:
 	float m_accumulated_gpu_time = 0.0f;
 	bool m_gpu_timing_enabled = false;
 	bool m_gpu_timing_supported = false;
-	bool m_wants_new_timestamp_calibration = false;
-	VkTimeDomainEXT m_calibrated_timestamp_type = VK_TIME_DOMAIN_DEVICE_EXT;
 
 	VkQueryPool m_pipeline_statistics_query_pool = VK_NULL_HANDLE;
 	GPUPipelineStatistics m_accumulated_gpu_pipeline_statistics{};
 	bool m_gpu_pipeline_statistics_enabled = false;
 	bool m_gpu_pipeline_statistics_supported = false;
+	bool m_wants_new_timestamp_calibration = false;
+	VkTimeDomainEXT m_calibrated_timestamp_type = VK_TIME_DOMAIN_DEVICE_EXT;
 
 	std::array<FrameResources, NUM_COMMAND_BUFFERS> m_frame_resources;
 	u64 m_next_fence_counter = 1;
@@ -417,6 +458,10 @@ private:
 
 	VkDescriptorSetLayout m_utility_ds_layout = VK_NULL_HANDLE;
 	VkPipelineLayout m_utility_pipeline_layout = VK_NULL_HANDLE;
+	// Cached last-set utility push constants, replayed after a command-buffer rollover restart
+	// (present or render pass) so mobile Vulkan drivers don't draw with stale coordinates.
+	std::array<u8, CONVERT_PUSH_CONSTANTS_SIZE> m_utility_push_constants{};
+	u32 m_utility_push_constants_size = 0;
 
 	VkDescriptorSetLayout m_tfx_ubo_ds_layout = VK_NULL_HANDLE;
 	VkDescriptorSetLayout m_tfx_texture_ds_layout = VK_NULL_HANDLE;
@@ -461,6 +506,7 @@ private:
 	std::unordered_map<GSHWDrawConfig::PSSelector, VkShaderModule, GSHWDrawConfig::PSSelectorHash>
 		m_tfx_fragment_shaders;
 	std::unordered_map<PipelineSelector, VkPipeline, PipelineSelectorHash> m_tfx_pipelines;
+	u32 m_tfx_pipeline_compile_counter = 0;
 
 	VkRenderPass m_utility_color_render_pass_load = VK_NULL_HANDLE;
 	VkRenderPass m_utility_color_render_pass_clear = VK_NULL_HANDLE;
@@ -492,6 +538,23 @@ private:
 		ShaderInterlace shader, Filter filter, const InterlaceConstantBuffer& cb) final;
 	void DoShadeBoost(GSTexture* sTex, GSTexture* dTex, const float params[4]) final;
 	void DoFXAA(GSTexture* sTex, GSTexture* dTex) final;
+	bool DoApplyShaderChain(GSTexture* sTex, GSTexture* dTex) override;
+
+	/// librashader filter chain state. The handle is void* rather than
+	/// libra_vk_filter_chain_t so this header doesn't need librashader.h — that header
+	/// only exists when the Rust toolchain built the lib (ARMSX2_HAS_LIBRASHADER).
+	/// The chain is rebuilt only when the preset path changes: creating it compiles the
+	/// whole slang chain, while the per-frame call is just command recording.
+	void* m_shader_chain = nullptr;
+	std::string m_shader_chain_preset;
+	bool m_shader_chain_failed = false;
+	size_t m_shader_frame_count = 0;
+	/// Last parameter-override generation pushed into m_shader_chain. Zeroed whenever the
+	/// chain is (re)created, because a new chain starts at the preset's initial values and
+	/// has to be re-fed regardless of whether the store changed.
+	u64 m_shader_param_generation = 0;
+	void DestroyShaderChain();
+	void ApplyShaderChainParams();
 
 	bool DoCAS(
 		GSTexture* sTex, GSTexture* dTex, bool sharpen_only, const std::array<u32, NUM_CAS_CONSTANTS>& constants) final;
@@ -595,6 +658,7 @@ public:
 	void Draw(const GSHWDrawConfig& config, int offset, int count);
 
 	std::unique_ptr<GSDownloadTexture> CreateDownloadTexture(u32 width, u32 height, GSTexture::Format format) override;
+	void HintReadbackSource(GSTexture* tex) override;
 
 	void CopyRect(GSTexture* sTex, GSTexture* dTex, const GSVector4i& r, u32 destX, u32 destY) override;
 
@@ -754,6 +818,23 @@ private:
 	VkFramebuffer m_current_framebuffer = VK_NULL_HANDLE;
 	VkRenderPass m_current_render_pass = VK_NULL_HANDLE;
 	GSVector4i m_current_render_pass_area = GSVector4i::zero();
+
+	// Mid-frame submission for readback-prone frames: when a game synchronously reads
+	// GS memory back (local->host TRXDIR), the readback fence-waits on everything
+	// recorded before it. Submitting accumulated work at render-pass boundaries lets
+	// the GPU execute concurrently with GS-thread recording, so that wait finds the
+	// work already complete (OutRun 2006 SD865: 3 sun-occlusion readbacks/frame cost
+	// ~8ms/frame stalled without this). Counters in render passes; ~0u = never.
+	u32 m_render_passes_since_submit = 0;
+	u32 m_render_passes_since_readback = ~0u;
+
+	// Textures recently used as synchronous-readback sources (see HintReadbackSource).
+	// A draw INTO one of these is almost certainly the producer of the next readback,
+	// so RenderHW kicks the command buffer first: the queued backlog drains while the
+	// producing pass records, leaving the readback to wait on one small pass + copy
+	// instead of the whole backlog. Compared by pointer only, never dereferenced —
+	// a recycled allocation at worst causes one extra readback-window submit.
+	std::array<GSTexture*, 2> m_recent_readback_sources = {};
 
 	GSVector4i m_scissor = GSVector4i::zero();
 	VkViewport m_viewport = {0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 1.0f};

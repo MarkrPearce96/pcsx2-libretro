@@ -15,6 +15,7 @@ enum class AudioBackend : u8
 	Cubeb,
 	SDL,
 	Libretro, // pcsx2-libretro: routes samples to retro_audio_sample_batch_t (SP4)
+	Oboe,
 	Count
 };
 

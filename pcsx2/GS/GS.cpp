@@ -52,7 +52,11 @@
 
 #include "fmt/format.h"
 
+#include <atomic>
 #include <fstream>
+#include <algorithm>
+#include <array>
+#include <string_view>
 
 Pcsx2Config::GSOptions GSConfig;
 
@@ -200,6 +204,32 @@ static void GSClampUpscaleMultiplier(Pcsx2Config::GSOptions& config)
 	config.UpscaleMultiplier = static_cast<float>(max_upscale_multiplier);
 }
 
+#ifdef __ANDROID__
+// Some MediaTek Mali drivers render duplicated horizontal framebuffer regions in Tekken 5
+// when the GameDB's Native half-pixel-offset mode (value 4) is active. Force the offset Off
+// there — and ONLY there — preserving Native for every other GPU and game and respecting a
+// user's manual hacks. Ported from sashkinbro/EmuCoreX. Reachable only while the Tekken 5
+// GameDB entries keep halfPixelOffset: Native.
+static bool IsTekken5Serial(const std::string_view serial)
+{
+	static constexpr std::array<std::string_view, 11> k_tekken5_serials = {
+		"SCAJ-20125", "SCAJ-20126", "SCAJ-20199", "SCED-53538", "SCES-53202",
+		"SCKA-20049", "SCKA-20081", "SLPS-25510", "SLPS-73223", "SLUS-21059", "SLUS-21160"};
+	return std::find(k_tekken5_serials.begin(), k_tekken5_serials.end(), serial) != k_tekken5_serials.end();
+}
+
+static void ApplyAndroidGameDBOverrides()
+{
+	if (!g_gs_device || !g_gs_device->IsMaliGPUProfile() || !g_gs_device->IsMediaTekSoC() ||
+		GSConfig.ManualUserHacks || GSConfig.UserHacks_HalfPixelOffset != GSHalfPixelOffset::Native)
+		return;
+	if (!IsTekken5Serial(VMManager::GetDiscSerial()))
+		return;
+	GSConfig.UserHacks_HalfPixelOffset = GSHalfPixelOffset::Off;
+	Console.WriteLn("Android: Tekken 5 on MediaTek Mali — forcing HalfPixelOffset Off (duplicated-framebuffer fix).");
+}
+#endif
+
 static bool OpenGSRenderer(GSRendererType renderer, u8* basemem)
 {
 	// Must be done first, initialization routines in GSState use GSIsHardwareRenderer().
@@ -321,6 +351,9 @@ bool GSreopen(bool recreate_device, bool recreate_renderer, GSRendererType new_r
 
 	if (recreate_renderer)
 	{
+#ifdef __ANDROID__
+		ApplyAndroidGameDBOverrides();
+#endif
 		if (!OpenGSRenderer(new_renderer, basemem))
 		{
 			Console.Error("(GSreopen) Failed to create new renderer");
@@ -351,6 +384,9 @@ bool GSopen(const Pcsx2Config::GSOptions& config, GSRendererType renderer, u8* b
 	bool res = OpenGSDevice(renderer, true, false, vsync_mode, allow_present_throttle);
 	if (res)
 	{
+#ifdef __ANDROID__
+		ApplyAndroidGameDBOverrides();
+#endif
 		res = OpenGSRenderer(renderer, basemem);
 		if (!res)
 			CloseGSDevice(true);
@@ -434,6 +470,55 @@ void GSgifTransfer2(u8* mem, u32 size)
 void GSgifTransfer3(u8* mem, u32 size)
 {
 	g_gs_renderer->Transfer<2>(const_cast<u8*>(mem), size);
+}
+
+// Manual frameskip target (Android). Set from the UI thread via the JNI
+// setFrameSkip, read on the GS thread in GSRenderer::VSync. Relaxed atomic — a
+// stale read at most mis-skips a single frame, which is harmless.
+static std::atomic<u32> s_manual_frameskip{0};
+void GSSetManualFrameSkip(u32 frames)
+{
+	s_manual_frameskip.store(frames, std::memory_order_relaxed);
+}
+u32 GSGetManualFrameSkip()
+{
+	return s_manual_frameskip.load(std::memory_order_relaxed);
+}
+
+// Max presented-FPS cap (Android). Caps the DISPLAY frame rate without slowing
+// emulation — read on the GS thread in GSRenderer::VSync, which drops a present
+// only when ahead of the target interval (adaptive, no over-skip). 0 = off.
+// s_max_present_fps is the cap value (for the OSD label); s_max_present_interval
+// is the vsync-aligned minimum present spacing in CPU ticks, computed in
+// native-lib setFpsCap where the native refresh is known, so display rates snap
+// to whole vsync multiples (60/30/20/15…) and hold steady at the boundary.
+static std::atomic<u32> s_max_present_fps{0};
+static std::atomic<u64> s_max_present_interval{0};
+// Fast-forward (Turbo) bypasses the present cap so the speed-up is visible. Set
+// from the limiter-mode JNI (Turbo → true, anything else → false) and read on
+// the GS thread in GSRenderer::VSync. Unlimited (frame-limit-off steady state)
+// deliberately does NOT set this — there the present cap is still wanted.
+static std::atomic<bool> s_present_cap_suspended{false};
+void GSSetMaxPresentFps(u32 fps, u64 present_interval)
+{
+	s_max_present_fps.store(fps, std::memory_order_relaxed);
+	s_max_present_interval.store(present_interval, std::memory_order_relaxed);
+}
+u32 GSGetMaxPresentFps()
+{
+	return s_max_present_fps.load(std::memory_order_relaxed);
+}
+u64 GSGetMaxPresentInterval()
+{
+	return s_max_present_interval.load(std::memory_order_relaxed);
+}
+void GSSetPresentCapSuspended(bool suspended)
+{
+	s_present_cap_suspended.store(suspended, std::memory_order_relaxed);
+}
+bool GSGetPresentCapSuspended()
+{
+	return s_present_cap_suspended.load(std::memory_order_relaxed);
 }
 
 void GSvsync(u32 field, bool registers_written)
@@ -994,6 +1079,10 @@ void GSFreeWrappedMemory(void* ptr, size_t size, size_t repeat)
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <unistd.h>
+#if defined(__ANDROID__)
+#include <sys/syscall.h>
+#include <android/sharedmem.h>
+#endif
 
 static int s_shm_fd = -1;
 
@@ -1002,6 +1091,14 @@ void* GSAllocateWrappedMemory(size_t size, size_t repeat)
 	pxAssert(s_shm_fd == -1);
 
 	const char* file_name = "/GS.mem";
+#if defined(__ANDROID__)
+	s_shm_fd = static_cast<int>(syscall(__NR_memfd_create, "GS.mem", 0));
+	if (s_shm_fd == -1)
+	{
+		fprintf(stderr, "Failed to create memfd due to %s\n", strerror(errno));
+		return nullptr;
+	}
+#else
 	s_shm_fd = shm_open(file_name, O_RDWR | O_CREAT | O_EXCL, 0600);
 	if (s_shm_fd != -1)
 	{
@@ -1012,6 +1109,7 @@ void* GSAllocateWrappedMemory(size_t size, size_t repeat)
 		fprintf(stderr, "Failed to open %s due to %s\n", file_name, strerror(errno));
 		return nullptr;
 	}
+#endif
 
 	if (ftruncate(s_shm_fd, repeat * size) < 0)
 		fprintf(stderr, "Failed to reserve memory due to %s\n", strerror(errno));
@@ -1167,8 +1265,40 @@ static void HotkeyAdjustUpscaleMultiplier(const float delta)
 	MTGS::ApplySettings();
 }
 
+static bool s_osd_hotkey_forced_simple = false;
+
+static bool HasConfiguredOSD()
+{
+	return EmuConfig.GS.OsdShowSpeed || EmuConfig.GS.OsdShowFPS || EmuConfig.GS.OsdShowVPS ||
+		   EmuConfig.GS.OsdShowResolution || EmuConfig.GS.OsdShowGSStats || EmuConfig.GS.OsdShowCPU ||
+		   EmuConfig.GS.OsdShowGPU || EmuConfig.GS.OsdShowGPUDebug || EmuConfig.GS.OsdShowIndicators ||
+		   EmuConfig.GS.OsdShowFrameTimes || EmuConfig.GS.OsdShowHardwareInfo || EmuConfig.GS.OsdShowVersion ||
+		   EmuConfig.GS.OsdShowSettings || EmuConfig.GS.OsdshowPatches || EmuConfig.GS.OsdShowInputs ||
+		   EmuConfig.GS.OsdShowInputRec || EmuConfig.GS.OsdShowVideoCapture || EmuConfig.GS.OsdShowTextureReplacements;
+}
+
+static void SetForcedSimpleOSD(bool enabled)
+{
+	s_osd_hotkey_forced_simple = enabled;
+	GSConfig.OsdShowFPS = enabled;
+	GSConfig.OsdShowVPS = enabled;
+	GSConfig.OsdShowSpeed = enabled;
+	GSConfig.OsdShowVersion = enabled;
+	GSConfig.OsdShowIndicators = enabled;
+	GSConfig.OsdMessagesPos = enabled ? OsdOverlayPos::TopLeft : OsdOverlayPos::None;
+	GSConfig.OsdPerformancePos = enabled ? OsdOverlayPos::TopRight : OsdOverlayPos::None;
+}
+
 static void HotkeyToggleOSD()
 {
+	if (!HasConfiguredOSD())
+	{
+		SetForcedSimpleOSD(!s_osd_hotkey_forced_simple || GSConfig.OsdPerformancePos == OsdOverlayPos::None);
+		return;
+	}
+
+	s_osd_hotkey_forced_simple = false;
+
 	GSConfig.OsdShowSettings ^= EmuConfig.GS.OsdShowSettings;
 	GSConfig.OsdshowPatches ^= EmuConfig.GS.OsdshowPatches;
 	GSConfig.OsdShowInputs ^= EmuConfig.GS.OsdShowInputs;

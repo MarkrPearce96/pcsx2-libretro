@@ -7,6 +7,7 @@
 #include "common/WindowInfo.h"
 #include "GS/GS.h"
 #include "GS/Renderers/Common/GSFastList.h"
+#include "GS/Renderers/Common/GSGPUProfile.h"
 #include "GS/Renderers/Common/GSShaderEnums.h"
 #include "GS/Renderers/Common/GSTexture.h"
 #include "GS/Renderers/Common/GSVertex.h"
@@ -1401,9 +1402,17 @@ public:
 		bool depth_feedback       : 1; ///< Depth feedback loops can be done with DS directly (otherwise need to copy to separate RT).  Implies `feedback_loops`.
 		bool aa1                  : 1; ///< Supports the GS AA1 feature.
 		bool rov                  : 1; ///< Supports rasterizer ordered views for both depth and color.
+		bool metalfx_spatial      : 1; ///< Supports Apple MetalFX spatial upscaling (Metal backend, macOS 13+).
+		bool dual_source_blend    : 1; ///< Supports a second fragment output (SRC1) as a hardware blend factor.
+		bool broken_mad_deinterlace : 1; ///< Driver can't reliably preserve/read the two-bank FastMAD history target.
 		FeatureSupport()
 		{
 			memset(this, 0, sizeof(*this));
+			// Desktop backends (GL 3.3+, Metal, DX) always support this. GLES and Vulkan override it
+			// after querying the device, because mobile GPUs (notably Mali) may omit dual-source
+			// blending. When absent, GSRendererHW emulates SRC1 blend equations in-shader per-draw
+			// instead of forcing a global high blending-accuracy level. Ported from sashkinbro/EmuCoreX.
+			dual_source_blend = true;
 		}
 		/// Supports feedback loops through either texture barriers or rt copies.
 		bool feedback_loops() const { return texture_barrier || multidraw_fb_copy; }
@@ -1443,6 +1452,15 @@ protected:
 	std::string m_name = "Unknown";
 	FeatureSupport m_features;
 	u32 m_max_texture_size = 0;
+	RuntimeGpuProfile m_runtime_gpu_profile = RuntimeGpuProfile::Adreno;
+	// Per-vendor mobile GPU identity + GS tuning (pool sizes / ages / constrained), resolved from the
+	// GPU-profile system (sashkinbro/EmuCoreX). Drives texture/target pool sizing on Android below.
+	MobileGpuIdentity m_mobile_gpu_identity;
+	MobileGsTuning m_mobile_gs_tuning;
+	// Android: true when the SoC is MediaTek (Dimensity/Helio). Hoisted from GSDeviceVK
+	// so both backends + GS.cpp Android GameDB overrides can read it. Set during device
+	// open from the resolved GPU profile.
+	bool m_is_mediatek_soc = false;
 
 	struct
 	{
@@ -1483,6 +1501,7 @@ protected:
 	GSTexture* m_target_tmp = nullptr;
 	GSTexture* m_current = nullptr;
 	GSTexture* m_cas = nullptr;
+	GSTexture* m_mfx_output = nullptr; ///< MetalFX spatial upscale destination (Metal backend).
 	GSTexture* m_colclip_rt = nullptr; ///< Temp hw colclip texture
 	GSTexture* m_ds_as_rt = nullptr; ///< Depth as color
 
@@ -1494,12 +1513,33 @@ protected:
 	virtual void DoInterlace(GSTexture* sTex, const GSVector4& sRect, GSTexture* dTex, const GSVector4& dRect, ShaderInterlace shader, Filter filter, const InterlaceConstantBuffer& cb) = 0;
 	virtual void DoFXAA(GSTexture* sTex, GSTexture* dTex) = 0;
 	virtual void DoShadeBoost(GSTexture* sTex, GSTexture* dTex, const float params[4]) = 0;
+	/// Run the librashader filter chain from sTex into dTex. Returns false when the
+	/// backend has no chain support, the preset failed to load, or the frame was
+	/// skipped — the caller then leaves m_current alone, so an unsupported backend or
+	/// a bad preset degrades to "no shader" instead of a black screen. NOT pure: only
+	/// the Vulkan/OpenGL devices override it, everything else keeps the no-op.
+	virtual bool DoApplyShaderChain(GSTexture* sTex, GSTexture* dTex) { return false; }
+
+	/// Generation of the parameter-override store, bumped on every SetShaderChainParams.
+	/// A backend compares this against its own last-applied generation to decide whether
+	/// there is anything to do — it is an atomic load, so the per-frame check costs no
+	/// lock. Zero means nothing has ever been pushed.
+	static u64 GetShaderChainParamGeneration();
+
+	/// Copies the queued overrides into [out] when they belong to [preset], returning false
+	/// (and leaving [out] alone) when the store holds another preset's values or none at
+	/// all. Takes the lock, so call it only once the generation says something changed.
+	static bool GetShaderChainParams(const std::string& preset, std::vector<std::pair<std::string, float>>* out);
 
 	/// Resolves CAS shader includes for the specified source.
 	static bool GetCASShaderSource(std::string* source);
 
 	/// Applies CAS and writes to the destination texture, which should be a shader writeable texture.
 	virtual bool DoCAS(GSTexture* sTex, GSTexture* dTex, bool sharpen_only, const std::array<u32, NUM_CAS_CONSTANTS>& constants) = 0;
+
+	/// Upscales sTex into dTex using a backend-specific spatial upscaler (MetalFX on Metal).
+	/// Base implementation is a no-op; only the Metal backend overrides it.
+	virtual bool DoMetalFXSpatial(GSTexture* sTex, GSTexture* dTex) { return false; }
 
 	/// Perform texture operations for ImGui
 	void UpdateImGuiTextures();
@@ -1534,6 +1574,23 @@ public:
 	/// Returns a string representing the specified API.
 	static const char* RenderAPIToString(RenderAPI api);
 
+	/// Queues parameter overrides for the RetroArch shader chain. Set from the UI thread,
+	/// consumed on the GS thread: a librashader chain is single-threaded, so the UI must
+	/// NEVER call libra_*_filter_chain_set_param itself — it leaves the values here and
+	/// DoApplyShaderChain applies them just before the frame call.
+	///
+	/// [params] is a list of "assign this value to this parameter" instructions, NOT a
+	/// complete description of the chain's state. Anything absent keeps whatever the chain
+	/// already has, which for a freshly created chain is the preset's own initial value.
+	/// That is what makes reset work: the UI pushes the initial value explicitly rather
+	/// than dropping the entry, because a live chain has no "unset" for us to ask for.
+	///
+	/// [preset] is the preset the values were read off. It stops a stale push from landing
+	/// on the wrong chain — values queued for preset A are ignored once the device has
+	/// moved on to preset B, which would otherwise silently apply A's values to B's
+	/// same-named parameters.
+	static void SetShaderChainParams(std::string preset, std::vector<std::pair<std::string, float>> params);
+
 	/// Parses the configured fullscreen mode into its components (width * height @ refresh Hz)
 	static bool GetRequestedExclusiveFullscreenMode(u32* width, u32* height, float* refresh_rate);
 
@@ -1556,6 +1613,18 @@ public:
 
 	__fi FeatureSupport Features() const { return m_features; }
 	__fi u32 GetMaxTextureSize() const { return m_max_texture_size; }
+	__fi void SetRuntimeGPUProfile(RuntimeGpuProfile p) { m_runtime_gpu_profile = p; }
+	__fi void SetMobileGPUIdentity(const MobileGpuIdentity& identity) { m_mobile_gpu_identity = identity; }
+	__fi void SetMobileGSTuning(const MobileGsTuning& tuning) { m_mobile_gs_tuning = tuning; }
+	__fi const MobileGpuIdentity& GetMobileGPUIdentity() const { return m_mobile_gpu_identity; }
+	__fi const MobileGsTuning& GetMobileGSTuning() const { return m_mobile_gs_tuning; }
+	__fi bool IsConstrainedMobileGPUProfile() const { return m_mobile_gs_tuning.constrained; }
+	__fi RuntimeGpuProfile GetRuntimeGPUProfile() const { return m_runtime_gpu_profile; }
+	__fi void SetMediaTekSoC(bool v) { m_is_mediatek_soc = v; }
+	__fi bool IsMediaTekSoC() const { return m_is_mediatek_soc; }
+	__fi bool IsMaliGPUProfile() const { return (m_runtime_gpu_profile == RuntimeGpuProfile::Mali); }
+	__fi bool IsAdrenoGPUProfile() const { return (m_runtime_gpu_profile == RuntimeGpuProfile::Adreno); }
+	__fi bool IsPowerVRGPUProfile() const { return (m_runtime_gpu_profile == RuntimeGpuProfile::PowerVR); }
 
 	__fi const WindowInfo& GetWindowInfo() const { return m_window_info; }
 	__fi s32 GetWindowWidth() const { return static_cast<s32>(m_window_info.surface_width); }
@@ -1655,6 +1724,12 @@ public:
 
 	virtual std::unique_ptr<GSDownloadTexture> CreateDownloadTexture(u32 width, u32 height, GSTexture::Format format) = 0;
 
+	/// Hints that a synchronous CPU readback of `tex` is being performed. Games that read
+	/// back every frame (e.g. small occlusion-test targets) will typically draw into the
+	/// same texture again shortly before the next readback; backends can use this to
+	/// schedule command submission so that readback has minimal GPU backlog to wait on.
+	virtual void HintReadbackSource(GSTexture* tex);
+
 	virtual void CopyRect(GSTexture* sTex, GSTexture* dTex, const GSVector4i& r, u32 destX, u32 destY) = 0;
 
 	// StretchRect - all options
@@ -1702,9 +1777,17 @@ public:
 	void Interlace(const GSVector2i& ds, int field, int mode, float yoffset);
 	void FXAA();
 	void ShadeBoost();
+	/// Runs the configured RetroArch (.slangp) shader chain over m_current, after
+	/// ShadeBoost/FXAA. Shared guard + target selection; the actual chain lives in
+	/// DoApplyShaderChain, which only the librashader-capable backends override.
+	void ApplyShaderChain();
 	void Resize(int width, int height);
 
 	void CAS(GSTexture*& tex, GSVector4i& src_rect, GSVector4& src_uv, const GSVector4& draw_rect, bool sharpen_only);
+
+	/// Spatially upscales the merged display texture (MetalFX) to the draw-rect size, rewriting
+	/// tex/src_rect/src_uv to point at the upscaled result, mirroring CAS().
+	void MetalFXUpscale(GSTexture*& tex, GSVector4i& src_rect, GSVector4& src_uv, const GSVector4& draw_rect);
 
 	bool ResizeRenderTarget(GSTexture** t, int w, int h, bool preserve_contents, bool recycle);
 

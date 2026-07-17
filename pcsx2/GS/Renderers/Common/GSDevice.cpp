@@ -21,6 +21,47 @@
 #include <algorithm>
 #include <ostream>
 #include <fstream>
+#include <atomic>
+#include <mutex>
+
+namespace
+{
+	// Shader-chain parameter overrides, handed from the UI thread to the GS thread. See
+	// GSDevice::SetShaderChainParams for the contract; the generation is what keeps the
+	// per-frame read down to one atomic load on the frame path.
+	std::mutex s_shader_param_mutex;
+	std::string s_shader_param_preset;
+	std::vector<std::pair<std::string, float>> s_shader_params;
+	std::atomic<u64> s_shader_param_generation{0};
+} // namespace
+
+void GSDevice::SetShaderChainParams(std::string preset, std::vector<std::pair<std::string, float>> params)
+{
+	{
+		std::unique_lock lock(s_shader_param_mutex);
+		s_shader_param_preset = std::move(preset);
+		s_shader_params = std::move(params);
+	}
+
+	// Bumped after the store is populated, never before: the GS thread treats a new
+	// generation as "the values are ready to read".
+	s_shader_param_generation.fetch_add(1, std::memory_order_release);
+}
+
+u64 GSDevice::GetShaderChainParamGeneration()
+{
+	return s_shader_param_generation.load(std::memory_order_acquire);
+}
+
+bool GSDevice::GetShaderChainParams(const std::string& preset, std::vector<std::pair<std::string, float>>* out)
+{
+	std::unique_lock lock(s_shader_param_mutex);
+	if (s_shader_param_preset != preset || s_shader_params.empty())
+		return false;
+
+	*out = s_shader_params;
+	return true;
+}
 
 const char* ShaderEntryPoint(ShaderConvert value)
 {
@@ -249,7 +290,7 @@ GSDevice::GSDevice()
 GSDevice::~GSDevice()
 {
 	// should've been cleaned up in Destroy()
-	pxAssert(m_pool[0].empty() && m_pool[1].empty() && !m_merge && !m_weavebob && !m_blend && !m_mad && !m_target_tmp && !m_cas);
+	pxAssert(m_pool[0].empty() && m_pool[1].empty() && !m_merge && !m_weavebob && !m_blend && !m_mad && !m_target_tmp && !m_cas && !m_mfx_output);
 }
 
 const char* GSDevice::RenderAPIToString(RenderAPI api)
@@ -449,6 +490,11 @@ void GSDevice::ClearRenderTarget(GSTexture* t, u32 c)
 void GSDevice::ClearDepth(GSTexture* t, float d)
 {
 	t->SetClearDepth(d);
+}
+
+void GSDevice::HintReadbackSource(GSTexture* tex)
+{
+	// Default: no scheduling hint. See GSDeviceVK for a backend that uses it.
 }
 
 bool GSDevice::ProcessClearsBeforeCopy(GSTexture* sTex, GSTexture* dTex, const bool full_copy)
@@ -805,7 +851,7 @@ GSTexture* GSDevice::CreateTexture(int w, int h, int mipmap_levels, GSTexture::F
 {
 	pxAssert(mipmap_levels != 0 && (mipmap_levels < 0 || mipmap_levels <= GetMipmapLevelsForSize(w, h)));
 	const int levels = mipmap_levels < 0 ? GetMipmapLevelsForSize(w, h) : mipmap_levels;
-	return FetchSurface(GSTexture::Texture, w, h, levels, format, false, !m_features.prefer_new_textures || prefer_reuse);
+	return FetchSurface(GSTexture::Texture, w, h, levels, format, false, m_features.prefer_new_textures && prefer_reuse);
 }
 
 GSTexture* GSDevice::CreateTexture(const GSVector2i& size, int mipmap_levels, GSTexture::Format format, bool prefer_reuse)
@@ -925,6 +971,7 @@ void GSDevice::ClearCurrent()
 	delete m_mad;
 	delete m_target_tmp;
 	delete m_cas;
+	delete m_mfx_output;
 
 	m_merge = nullptr;
 	m_weavebob = nullptr;
@@ -932,6 +979,7 @@ void GSDevice::ClearCurrent()
 	m_mad = nullptr;
 	m_target_tmp = nullptr;
 	m_cas = nullptr;
+	m_mfx_output = nullptr;
 }
 
 void GSDevice::Merge(GSTexture* sTex[3], GSVector4* sRect, GSVector4* dRect, const GSVector2i& fs, const GSRegPMODE& PMODE, const GSRegEXTBUF& EXTBUF, u32 c)
@@ -1019,6 +1067,24 @@ void GSDevice::FXAA()
 		DoFXAA(m_current, dTex);
 		m_current = dTex;
 	}
+}
+
+void GSDevice::ApplyShaderChain()
+{
+	// Guarded here rather than in the backends so a device that never overrides
+	// DoApplyShaderChain (software, or a build without librashader) costs nothing.
+	if (!GSConfig.ShaderChainEnabled || GSConfig.ShaderChainPreset.empty() || !m_current)
+		return;
+
+	// Same ping-pong as FXAA: the chain reads m_current, so it can't also write it.
+	GSTexture*& dTex = (m_current == m_target_tmp) ? m_merge : m_target_tmp;
+	if (!ResizeRenderTarget(&dTex, m_current->GetWidth(), m_current->GetHeight(), false, false))
+		return;
+
+	// Only swap on success — a failed chain (bad preset, unsupported backend) must leave
+	// m_current pointing at the unshaded frame rather than at a target nothing rendered to.
+	if (DoApplyShaderChain(m_current, dTex))
+		m_current = dTex;
 }
 
 void GSDevice::ShadeBoost()
@@ -1191,6 +1257,37 @@ void GSDevice::CAS(GSTexture*& tex, GSVector4i& src_rect, GSVector4& src_uv, con
 	}
 
 	tex = m_cas;
+	src_rect = GSVector4i(0, 0, dst_width, dst_height);
+	src_uv = GSVector4(0.0f, 0.0f, 1.0f, 1.0f);
+}
+
+void GSDevice::MetalFXUpscale(GSTexture*& tex, GSVector4i& src_rect, GSVector4& src_uv, const GSVector4& draw_rect)
+{
+	const int dst_width = static_cast<int>(std::ceil(draw_rect.z - draw_rect.x));
+	const int dst_height = static_cast<int>(std::ceil(draw_rect.w - draw_rect.y));
+	if (dst_width <= 0 || dst_height <= 0)
+		return;
+
+	GSTexture* src_tex = tex;
+	if (!m_mfx_output || m_mfx_output->GetWidth() != dst_width || m_mfx_output->GetHeight() != dst_height)
+	{
+		delete m_mfx_output;
+		m_mfx_output = CreateSurface(GSTexture::ShaderWriteTexture, dst_width, dst_height, 1, GSTexture::Format::Color);
+		if (!m_mfx_output)
+		{
+			Console.Error("Failed to allocate MetalFX output texture.");
+			return;
+		}
+	}
+
+	if (!DoMetalFXSpatial(src_tex, m_mfx_output))
+	{
+		// leave textures intact if we failed
+		Console.Warning("Applying MetalFX spatial upscale failed.");
+		return;
+	}
+
+	tex = m_mfx_output;
 	src_rect = GSVector4i(0, 0, dst_width, dst_height);
 	src_uv = GSVector4(0.0f, 0.0f, 1.0f, 1.0f);
 }

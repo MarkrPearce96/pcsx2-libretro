@@ -721,7 +721,8 @@ Pcsx2Config::GSOptions::GSOptions()
 	UseBlitSwapChain = false;
 	DisableShaderCache = false;
 	DisableFramebufferFetch = false;
-	DisableVertexShaderExpand = false;
+	DisableVertexShaderExpand = false;	EnableAdrenoFramebufferFetch = false;
+	ForceMaliFramebufferFetch = false;
 	SkipDuplicateFrames = true;
 	OsdMessagesPos = OsdOverlayPos::TopLeft;
 	OsdPerformancePos = OsdOverlayPos::TopRight;
@@ -835,6 +836,7 @@ bool Pcsx2Config::GSOptions::OptionsAreEqual(const GSOptions& right) const
 		OpEqu(GSDumpCompression) &&
 		OpEqu(HWDownloadMode) &&
 		OpEqu(CASMode) &&
+		OpEqu(Upscaler) &&
 		OpEqu(Dithering) &&
 		OpEqu(MaxAnisotropy) &&
 		OpEqu(SWExtraThreads) &&
@@ -881,6 +883,9 @@ bool Pcsx2Config::GSOptions::OptionsAreEqual(const GSOptions& right) const
 		OpEqu(ScreenshotFormat) &&
 		OpEqu(ScreenshotQuality) &&
 
+		OpEqu(ShaderChainEnabled) &&
+		OpEqu(ShaderChainPreset) &&
+
 		OpEqu(CaptureContainer) &&
 		OpEqu(VideoCaptureCodec) &&
 		OpEqu(VideoCaptureFormat) &&
@@ -893,6 +898,7 @@ bool Pcsx2Config::GSOptions::OptionsAreEqual(const GSOptions& right) const
 		OpEqu(AudioCaptureBitrate) &&
 
 		OpEqu(Adapter) &&
+		OpEqu(AndroidGpuProfileOverride) &&
 
 		OpEqu(HWDumpDirectory) &&
 		OpEqu(SWDumpDirectory));
@@ -911,7 +917,8 @@ bool Pcsx2Config::GSOptions::RestartOptionsAreEqual(const GSOptions& right) cons
 		   OpEqu(UseBlitSwapChain) &&
 		   OpEqu(DisableShaderCache) &&
 		   OpEqu(DisableFramebufferFetch) &&
-		   OpEqu(DisableVertexShaderExpand) &&
+		   OpEqu(DisableVertexShaderExpand) &&		   OpEqu(EnableAdrenoFramebufferFetch) &&
+		   OpEqu(ForceMaliFramebufferFetch) &&
 		   OpEqu(OverrideTextureBarriers) &&
 		   OpEqu(DepthFeedbackMode) &&
 		   OpEqu(HWAA1) &&
@@ -959,7 +966,8 @@ void Pcsx2Config::GSOptions::LoadSave(SettingsWrapper& wrap)
 	SettingsWrapBitBool(UseBlitSwapChain);
 	SettingsWrapBitBool(DisableShaderCache);
 	SettingsWrapBitBool(DisableFramebufferFetch);
-	SettingsWrapBitBool(DisableVertexShaderExpand);
+	SettingsWrapBitBool(DisableVertexShaderExpand);	SettingsWrapBitBool(EnableAdrenoFramebufferFetch);
+	SettingsWrapBitBool(ForceMaliFramebufferFetch);
 	SettingsWrapBitBool(SkipDuplicateFrames);
 	SettingsWrapBitBool(OsdShowSpeed);
 	SettingsWrapBitBool(OsdShowFPS);
@@ -1057,6 +1065,7 @@ void Pcsx2Config::GSOptions::LoadSave(SettingsWrapper& wrap)
 	SettingsWrapIntEnumEx(GSDumpCompression, "GSDumpCompression");
 	SettingsWrapIntEnumEx(HWDownloadMode, "HWDownloadMode");
 	SettingsWrapIntEnumEx(CASMode, "CASMode");
+	SettingsWrapIntEnumEx(Upscaler, "Upscaler");
 	SettingsWrapBitfieldEx(CAS_Sharpness, "CASSharpness");
 	SettingsWrapBitfieldEx(Dithering, "dithering_ps2");
 	SettingsWrapBitfieldEx(MaxAnisotropy, "MaxAnisotropy");
@@ -1093,6 +1102,9 @@ void Pcsx2Config::GSOptions::LoadSave(SettingsWrapper& wrap)
 	SettingsWrapBitfieldEx(SaveFrameCount, "SaveFrameCount");
 	SettingsWrapBitfieldEx(SaveFrameBy, "SaveFrameBy");
 
+	SettingsWrapEntryEx(ShaderChainEnabled, "ShaderChainEnabled");
+	SettingsWrapEntryEx(ShaderChainPreset, "ShaderChainPreset");
+
 	SettingsWrapEntryEx(CaptureContainer, "CaptureContainer");
 	SettingsWrapEntryEx(VideoCaptureCodec, "VideoCaptureCodec");
 	SettingsWrapEntryEx(VideoCaptureFormat, "VideoCaptureFormat");
@@ -1105,6 +1117,13 @@ void Pcsx2Config::GSOptions::LoadSave(SettingsWrapper& wrap)
 	SettingsWrapBitfieldEx(AudioCaptureBitrate, "AudioCaptureBitrate");
 
 	SettingsWrapEntry(Adapter);
+	SettingsWrapEntry(AndroidGpuProfileOverride);
+	if (StringUtil::Strcasecmp(AndroidGpuProfileOverride.c_str(), "mali") == 0)
+		AndroidGpuProfileOverride = "mali";
+	else if (StringUtil::Strcasecmp(AndroidGpuProfileOverride.c_str(), "adreno") == 0)
+		AndroidGpuProfileOverride = "adreno";
+	else
+		AndroidGpuProfileOverride = "auto";
 	SettingsWrapEntry(HWDumpDirectory);
 	if (!HWDumpDirectory.empty() && !Path::IsAbsolute(HWDumpDirectory))
 		HWDumpDirectory = Path::Combine(EmuFolders::DataRoot, HWDumpDirectory);
@@ -2217,7 +2236,7 @@ bool EmuFolders::SetDataDirectory(Error* error)
 			if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Documents, 0, NULL, &documents_directory)))
 			{
 				if (std::wcslen(documents_directory) > 0)
-					DataRoot = Path::Combine(StringUtil::WideStringToUTF8String(documents_directory), "PCSX2");
+					DataRoot = Path::Combine(StringUtil::WideStringToUTF8String(documents_directory), "ARMSX2");
 				CoTaskMemFree(documents_directory);
 			}
 #elif defined(__linux__) || defined(__FreeBSD__)
@@ -2225,7 +2244,7 @@ bool EmuFolders::SetDataDirectory(Error* error)
 			const char* xdg_config_home = getenv("XDG_CONFIG_HOME");
 			if (xdg_config_home && Path::IsAbsolute(xdg_config_home))
 			{
-				DataRoot = Path::RealPath(Path::Combine(xdg_config_home, "PCSX2"));
+				DataRoot = Path::RealPath(Path::Combine(xdg_config_home, "ARMSX2"));
 			}
 			else
 			{
@@ -2238,18 +2257,18 @@ bool EmuFolders::SetDataDirectory(Error* error)
 					if (!FileSystem::DirectoryExists(config_dir.c_str()))
 						FileSystem::CreateDirectoryPath(config_dir.c_str(), false);
 
-					DataRoot = Path::RealPath(Path::Combine(config_dir, "PCSX2"));
+					DataRoot = Path::RealPath(Path::Combine(config_dir, "ARMSX2"));
 				}
 			}
 #elif defined(__APPLE__)
-			static constexpr char MAC_DATA_DIR[] = "Library/Application Support/PCSX2";
+			static constexpr char MAC_DATA_DIR[] = "Library/Application Support/ARMSX2";
 			const char* home_dir = getenv("HOME");
 			if (home_dir)
 				DataRoot = Path::RealPath(Path::Combine(home_dir, MAC_DATA_DIR));
 #endif
 			}
 			else // Otherwise use the custom path provided by the user
-				DataRoot = Path::RealPath(Path::Combine(EmuConfig.CustomDataPath, "PCSX2"));
+				DataRoot = Path::RealPath(Path::Combine(EmuConfig.CustomDataPath, "ARMSX2"));
 		}
 
 	// Couldn't determine the data directory, or using portable mode? fallback to portable.
@@ -2262,7 +2281,7 @@ bool EmuFolders::SetDataDirectory(Error* error)
 		if (getenv("APPIMAGE"))
 		{
 			std::string_view appimage_path = Path::GetDirectory(getenv("APPIMAGE"));
-			DataRoot = Path::RealPath(Path::Combine(appimage_path, "PCSX2"));
+			DataRoot = Path::RealPath(Path::Combine(appimage_path, "ARMSX2"));
 		}
 		else
 			DataRoot = Path::Combine(AppRoot, GetPortableModePath());
@@ -2363,6 +2382,25 @@ bool EmuFolders::EnsureFoldersExist()
 	result = FileSystem::CreateDirectoryPath(Videos.c_str(), false) && result;
 	result = FileSystem::CreateDirectoryPath(DebuggerLayouts.c_str(), false) && result;
 	result = FileSystem::CreateDirectoryPath(DebuggerSettings.c_str(), false) && result;
+
+#ifdef __ANDROID__
+	// Android's MediaScanner indexes image files (PNG/DDS replacement textures
+	// and texture dumps) in any folder without a .nomedia marker, so on the
+	// shared-storage "sdcard" data setting the user's texture packs end up in
+	// their gallery/camera roll. Drop a .nomedia in the textures folder only —
+	// the scanner applies it recursively, so it also covers the per-game
+	// dumps/replacements subdirs. Screenshots (snaps), cover art and videos are
+	// intentionally left out so they STILL appear in the gallery.
+	if (!Textures.empty())
+	{
+		const std::string marker(Path::Combine(Textures, ".nomedia"));
+		if (!FileSystem::FileExists(marker.c_str()))
+		{
+			if (std::FILE* fp = FileSystem::OpenCFile(marker.c_str(), "wb"))
+				std::fclose(fp);
+		}
+	}
+#endif
 	return result;
 }
 

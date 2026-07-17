@@ -213,6 +213,11 @@ bool Host::CopyTextToClipboard(const std::string_view text)
     return false;
 }
 
+std::string Host::GetTextFromClipboard()
+{
+    return {};
+}
+
 void Host::BeginTextInput()
 {
 }

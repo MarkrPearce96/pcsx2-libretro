@@ -170,6 +170,15 @@ bool GSRenderer::Merge(int field)
 		mode = ((static_cast<int>(GSConfig.InterlaceMode) - 2) >> 1);
 	}
 
+	// FastMAD (mode 3) stores four fields in a two-bank history target. Older Mali-G57 Vulkan drivers
+	// can expose stale/alternating banks during reconstruction; Bob isn't a safe fallback (its
+	// alternating field phase makes the whole picture move vertically). Use weave+blend (mode 2)
+	// instead, and suppress the FFMD merge offset so both passes keep a fixed coordinate system.
+	// Ported from sashkinbro/EmuCoreX.
+	const bool stable_mad_fallback = (mode == 3 && g_gs_device->Features().broken_mad_deinterlace);
+	if (stable_mad_fallback)
+		mode = 2;
+
 	for (int i = 0; i < 2; i++)
 	{
 		 const GSPCRTCRegs::PCRTCDisplay& curCircuit = PCRTCDisplays.PCRTCDisplays[i];
@@ -186,7 +195,7 @@ bool GSRenderer::Merge(int field)
 		src_gs_read[i] = ((GSVector4(curCircuit.framebufferRect) + GSVector4(0, y_offset[i], 0, y_offset[i])) * scale) / GSVector4(tex[i]->GetSize()).xyxy();
 
 		float interlace_offset = 0.0f;
-		if (isReallyInterlaced() && m_regs->SMODE2.FFMD && !is_bob && !GSConfig.DisableInterlaceOffset && GSConfig.InterlaceMode != GSInterlaceMode::Off)
+		if (isReallyInterlaced() && m_regs->SMODE2.FFMD && !is_bob && !stable_mad_fallback && !GSConfig.DisableInterlaceOffset && GSConfig.InterlaceMode != GSInterlaceMode::Off)
 		{
 			interlace_offset = (scale.y) * static_cast<float>(field ^ field2);
 		}
@@ -250,6 +259,11 @@ bool GSRenderer::Merge(int field)
 
 	if (GSConfig.FXAA)
 		g_gs_device->FXAA();
+
+	// RetroArch (.slangp) shader chain runs last in the post-process chain, so it sees
+	// the finished frame the way the user actually sees it (ShadeBoost/FXAA included).
+	// Self-guards on GSConfig.ShaderChainEnabled and no-ops on backends without one.
+	g_gs_device->ApplyShaderChain();
 
 	// Sharpens biinear at lower resolutions, almost nearest but with more uniform pixels.
 	if (GSConfig.LinearPresent == GSPostBilinearMode::BilinearSharp && (g_gs_device->GetWindowWidth() > fs.x || g_gs_device->GetWindowHeight() > fs.y))
@@ -665,6 +679,27 @@ void GSRenderer::VSync(u32 field, bool registers_written, bool idle_frame)
 				src_rect, current->GetSize(), s_display_alignment, g_gs_device->UsesLowerLeftOrigin(),
 				GetVideoMode() == GSVideoMode::SDTV_480P);
 			s_last_draw_rect = draw_rect;
+
+			// MetalFX spatial upscale runs before CAS/present, and only when actually upscaling
+			// (source smaller than the on-screen draw rect). CAS can still sharpen afterward.
+			if (GSConfig.Upscaler == GSUpscaler::MetalFXSpatial)
+			{
+				static bool mfx_log_once = false;
+				if (g_gs_device->Features().metalfx_spatial)
+				{
+					const int draw_w = static_cast<int>(std::ceil(draw_rect.z - draw_rect.x));
+					const int draw_h = static_cast<int>(std::ceil(draw_rect.w - draw_rect.y));
+					if (current->GetWidth() < draw_w && current->GetHeight() < draw_h)
+						g_gs_device->MetalFXUpscale(current, src_rect, src_uv, draw_rect);
+				}
+				else if (!mfx_log_once)
+				{
+					Host::AddIconOSDMessage("MetalFXUnsupported", ICON_FA_TRIANGLE_EXCLAMATION,
+						TRANSLATE_SV("GS", "MetalFX upscaling is not available on this system (requires a Metal GPU on macOS 13 or newer)."),
+						10.0f);
+					mfx_log_once = true;
+				}
+			}
 
 			if (GSConfig.CASMode != GSCASMode::Disabled)
 			{

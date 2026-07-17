@@ -41,6 +41,10 @@
 #include "fmt/format.h"
 #include "imgui.h"
 
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
+
 #include <array>
 #include <cmath>
 #include <limits>
@@ -64,6 +68,7 @@ SmallString s_gs_frame_times_line;
 SmallString s_resolution_line;
 SmallString s_hardware_info_cpu_line;
 SmallString s_hardware_info_gpu_line;
+SmallString s_cpu_jit_line;
 SmallString s_cpu_usage_ee_line;
 SmallString s_cpu_usage_gs_line;
 SmallString s_cpu_usage_vu_line;
@@ -193,6 +198,19 @@ __ri void ImGuiManager::FormatProcessorStat(SmallStringBase& text, double usage,
 
 __ri void ImGuiManager::DrawPerformanceOverlay(float& position_y, float scale, float margin, float spacing)
 {
+	// The perf-OSD flags in GSConfig are refreshed from the authoritative EmuConfig.GS at
+	// the top of RenderOverlays (see the note there). When every perf line is off, draw
+	// nothing and return BEFORE any draw call, so a line string cached before a pause can't
+	// linger on screen (the rebuild block below is skipped while the VM is paused, which is
+	// why toggling in the menu looked inert).
+	if (!GSConfig.OsdShowFPS && !GSConfig.OsdShowVPS && !GSConfig.OsdShowSpeed &&
+		!GSConfig.OsdShowResolution && !GSConfig.OsdShowCPU && !GSConfig.OsdShowGPU &&
+		!GSConfig.OsdShowGSStats && !GSConfig.OsdShowFrameTimes && !GSConfig.OsdShowHardwareInfo &&
+		!GSConfig.OsdShowVersion && !GSConfig.OsdShowGPUStats)
+	{
+		return;
+	}
+
 	const float shadow_offset = std::ceil(scale);
 
 	ImFont* const osd_font = ImGuiManager::GetOSDFont();
@@ -377,7 +395,24 @@ __ri void ImGuiManager::DrawPerformanceOverlay(float& position_y, float scale, f
 			}
 
 			if (GSConfig.OsdShowVersion)
+			{
+#if defined(__APPLE__) && !TARGET_OS_IPHONE
+				if (BuildVersion::GitTagHi != 0 || BuildVersion::GitTagMid != 0 || BuildVersion::GitTagLo != 0)
+				{
+					s_speed_line.append_format("{}ARMSX2-MacOS 2.1 | Core: {}.{}.{}",
+						s_speed_line.empty() ? "" : " | ", BuildVersion::GitTagHi, BuildVersion::GitTagMid, BuildVersion::GitTagLo);
+				}
+				else
+				{
+					s_speed_line.append_format("{}ARMSX2-MacOS 2.1 | Core: {}",
+						s_speed_line.empty() ? "" : " | ", BuildVersion::GitRev);
+				}
+#elif defined(__ANDROID__)
+				s_speed_line.append_format("{}ARMSX2 2.7", s_speed_line.empty() ? "" : " | ");
+#else
 				s_speed_line.append_format("{}PCSX2 {}", s_speed_line.empty() ? "" : " | ", BuildVersion::GitRev);
+#endif
+			}
 
 			if (!s_speed_line.empty())
 			{
@@ -458,6 +493,15 @@ __ri void ImGuiManager::DrawPerformanceOverlay(float& position_y, float scale, f
 
 			if (GSConfig.OsdShowCPU)
 			{
+#if defined(__APPLE__) && !TARGET_OS_IPHONE
+				s_cpu_jit_line.format("EE:{} | IOP:{} | VU0:{} | VU1:{}",
+					EmuConfig.Cpu.Recompiler.EnableEE ? "JIT" : "INT",
+					EmuConfig.Cpu.Recompiler.EnableIOP ? "JIT" : "INT",
+					EmuConfig.Cpu.Recompiler.EnableVU0 ? "JIT" : "INT",
+					EmuConfig.Cpu.Recompiler.EnableVU1 ? "JIT" : "INT");
+				DRAW_LINE(osd_font, font_size, s_cpu_jit_line.c_str(), white_color);
+#endif
+
 				if (EmuConfig.Speedhacks.EECycleRate != 0 || EmuConfig.Speedhacks.EECycleSkip != 0)
 					s_cpu_usage_ee_line.format("EE[{}/{}]: ", EmuConfig.Speedhacks.EECycleRate, EmuConfig.Speedhacks.EECycleSkip);
 				else
@@ -562,6 +606,10 @@ __ri void ImGuiManager::DrawPerformanceOverlay(float& position_y, float scale, f
 
 			if (GSConfig.OsdShowCPU)
 			{
+#if defined(__APPLE__) && !TARGET_OS_IPHONE
+				if (!s_cpu_jit_line.empty())
+					DRAW_LINE(osd_font, font_size, s_cpu_jit_line.c_str(), white_color);
+#endif
 				DRAW_LINE(osd_font, font_size, s_cpu_usage_ee_line.c_str(), white_color);
 				DRAW_LINE(osd_font, font_size, s_cpu_usage_gs_line.c_str(), white_color);
 				if (THREAD_VU1)
@@ -1803,8 +1851,77 @@ void SaveStateSelectorUI::ShowSlotOSDMessage()
 		Host::OSD_QUICK_DURATION);
 }
 
+#ifdef __ANDROID__
+namespace {
+	// Reload-immune snapshot of the Android UI's OSD choice. VMManager::ApplySettings
+	// re-derives EmuConfig.GS from the layered settings interface (base + per-game) every
+	// time it runs, which can resurrect an OSD the user just turned off (a per-game layer
+	// or a reload race overriding the base). The native applyOsdSetting() choke point
+	// records the user's intent HERE after every OSD change, and RenderOverlays honours
+	// it — so no core settings reload can revert the on-screen state.
+	struct AndroidOSDVisibility
+	{
+		bool valid = false;
+		bool fps = false, vps = false, speed = false, resolution = false, cpu = false,
+			 gpu = false, gsStats = false, frameTimes = false, hardwareInfo = false,
+			 version = false, gpuStats = false, settings = false, inputs = false;
+	};
+	AndroidOSDVisibility s_android_osd_vis;
+} // namespace
+
+void ImGuiManager::SetAndroidOSDVisibility(bool fps, bool vps, bool speed, bool resolution,
+	bool cpu, bool gpu, bool gsStats, bool frameTimes, bool hardwareInfo, bool version,
+	bool gpuStats, bool settings, bool inputs)
+{
+	s_android_osd_vis = {true, fps, vps, speed, resolution, cpu, gpu, gsStats, frameTimes,
+		hardwareInfo, version, gpuStats, settings, inputs};
+}
+#endif
+
 void ImGuiManager::RenderOverlays()
 {
+	// Android: the live GSConfig can be stale — the GS device reopens whenever the
+	// pause/overlay releases the render surface, and GSopen re-derives GSConfig from a
+	// freshly-loaded config, so an OSD the user turned off silently came back. The Android
+	// UI records the user's authoritative OSD choice via SetAndroidOSDVisibility (immune to
+	// any VMManager::ApplySettings reload); honour that here when present, else fall back to
+	// EmuConfig.GS. Mirror every perf / settings-summary / inputs flag once, before any
+	// overlay draws, so the perf, settings and inputs overlays all honour their switches.
+#ifdef __ANDROID__
+	if (s_android_osd_vis.valid)
+	{
+		GSConfig.OsdShowFPS = s_android_osd_vis.fps;
+		GSConfig.OsdShowVPS = s_android_osd_vis.vps;
+		GSConfig.OsdShowSpeed = s_android_osd_vis.speed;
+		GSConfig.OsdShowResolution = s_android_osd_vis.resolution;
+		GSConfig.OsdShowCPU = s_android_osd_vis.cpu;
+		GSConfig.OsdShowGPU = s_android_osd_vis.gpu;
+		GSConfig.OsdShowGSStats = s_android_osd_vis.gsStats;
+		GSConfig.OsdShowFrameTimes = s_android_osd_vis.frameTimes;
+		GSConfig.OsdShowHardwareInfo = s_android_osd_vis.hardwareInfo;
+		GSConfig.OsdShowVersion = s_android_osd_vis.version;
+		GSConfig.OsdShowGPUStats = s_android_osd_vis.gpuStats;
+		GSConfig.OsdShowSettings = s_android_osd_vis.settings;
+		GSConfig.OsdShowInputs = s_android_osd_vis.inputs;
+	}
+	else
+#endif
+	{
+		GSConfig.OsdShowFPS = EmuConfig.GS.OsdShowFPS;
+		GSConfig.OsdShowVPS = EmuConfig.GS.OsdShowVPS;
+		GSConfig.OsdShowSpeed = EmuConfig.GS.OsdShowSpeed;
+		GSConfig.OsdShowResolution = EmuConfig.GS.OsdShowResolution;
+		GSConfig.OsdShowCPU = EmuConfig.GS.OsdShowCPU;
+		GSConfig.OsdShowGPU = EmuConfig.GS.OsdShowGPU;
+		GSConfig.OsdShowGSStats = EmuConfig.GS.OsdShowGSStats;
+		GSConfig.OsdShowFrameTimes = EmuConfig.GS.OsdShowFrameTimes;
+		GSConfig.OsdShowHardwareInfo = EmuConfig.GS.OsdShowHardwareInfo;
+		GSConfig.OsdShowVersion = EmuConfig.GS.OsdShowVersion;
+		GSConfig.OsdShowGPUStats = EmuConfig.GS.OsdShowGPUStats;
+		GSConfig.OsdShowSettings = EmuConfig.GS.OsdShowSettings;
+		GSConfig.OsdShowInputs = EmuConfig.GS.OsdShowInputs;
+	}
+
 	const float scale = ImGuiManager::GetGlobalScale();
 	const float margin = std::ceil(GSConfig.OsdMargin * scale);
 	const float spacing = std::ceil(5.0f * scale);

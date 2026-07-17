@@ -4,6 +4,7 @@
 #include "GS/Renderers/OpenGL/GLContext.h"
 #include "GS/Renderers/OpenGL/GSDeviceOGL.h"
 #include "GS/Renderers/OpenGL/GLState.h"
+#include "GS/Renderers/Common/GSGPUProfile.h"
 #include "GS/GSState.h"
 #include "GS/GSGL.h"
 #include "GS/GSPerfMon.h"
@@ -17,6 +18,13 @@
 
 #include "imgui.h"
 #include "IconsFontAwesome.h"
+
+#ifdef ARMSX2_HAS_LIBRASHADER
+// librashader only declares its OpenGL entry points when the consumer opts in. Defined by
+// CMake only when the Rust toolchain actually produced the library.
+#define LIBRA_RUNTIME_OPENGL
+#include "librashader.h"
+#endif
 
 #include <cinttypes>
 #include <fstream>
@@ -264,6 +272,8 @@ bool GSDeviceOGL::Create(GSVSyncMode vsync_mode, bool allow_present_throttle)
 		return false;
 	}
 
+	m_is_gles = m_gl_context->IsGLES();
+
 	if (!CheckFeatures())
 		return false;
 
@@ -278,7 +288,7 @@ bool GSDeviceOGL::Create(GSVSyncMode vsync_mode, bool allow_present_throttle)
 
 	if (!GSConfig.DisableShaderCache)
 	{
-		if (!m_shader_cache.Open())
+		if (!m_shader_cache.Open(m_is_gles))
 			Console.Warning("GL: Shader cache failed to open.");
 	}
 	else
@@ -286,6 +296,10 @@ bool GSDeviceOGL::Create(GSVSyncMode vsync_mode, bool allow_present_throttle)
 		Console.WriteLn("GL: Not using shader cache.");
 	}
 
+	// GL-ES init bisect markers (Adreno 650/740 boot crash). The crash is a
+	// silent driver fault with no bad-shader dump, so the LAST stage printed in
+	// the emulog before it cuts off pinpoints the faulting phase.
+	Console.WriteLn("@@ANDROID_GL_INIT@@ stage=objects");
 	// because of fbo bindings below...
 	GLState::Clear();
 
@@ -294,12 +308,25 @@ bool GSDeviceOGL::Create(GSVSyncMode vsync_mode, bool allow_present_throttle)
 	// ****************************************************************
 	if (GSConfig.UseDebugDevice)
 	{
-		glDebugMessageCallback(DebugMessageCallback, nullptr);
+		if (!m_is_gles) {
+			glDebugMessageCallback(DebugMessageCallback, NULL);
 
-		glDebugMessageControl(GL_DONT_CARE, GL_DONT_CARE, GL_DONT_CARE, 0, nullptr, true);
-		// Useless info message on Nvidia driver
-		static constexpr const GLuint ids[] = { 0x20004 };
-		glDebugMessageControl(GL_DEBUG_SOURCE_API_ARB, GL_DEBUG_TYPE_OTHER_ARB, GL_DONT_CARE, std::size(ids), ids, false);
+			glDebugMessageControl(GL_DONT_CARE, GL_DONT_CARE, GL_DONT_CARE, 0, NULL, true);
+			// Useless info message on Nvidia driver
+			static constexpr const GLuint ids[] = {0x20004};
+			glDebugMessageControl(GL_DEBUG_SOURCE_API_ARB, GL_DEBUG_TYPE_OTHER_ARB, GL_DONT_CARE,
+								  std::size(ids), ids, false);
+		}
+		else if (GLAD_GL_KHR_debug)
+		{
+			glDebugMessageCallback(DebugMessageCallback, nullptr);
+
+			glDebugMessageControl(GL_DONT_CARE, GL_DONT_CARE, GL_DONT_CARE, 0, nullptr, true);
+
+			// Useless info message on Nvidia driver
+			static constexpr const GLuint ids[] = { 0x20004 };
+			glDebugMessageControl(GL_DEBUG_SOURCE_API_ARB, GL_DEBUG_TYPE_OTHER_ARB, GL_DONT_CARE, std::size(ids), ids, false);
+		}
 
 		// Uncomment synchronous if you want callstacks which match where the error occurred.
 		glEnable(GL_DEBUG_OUTPUT);
@@ -571,6 +598,7 @@ bool GSDeviceOGL::Create(GSVSyncMode vsync_mode, bool allow_present_throttle)
 		}
 	}
 
+	Console.WriteLn("@@ANDROID_GL_INIT@@ stage=convert_present_merge_interlace_done");
 	// ****************************************************************
 	// Post processing
 	// ****************************************************************
@@ -578,7 +606,16 @@ bool GSDeviceOGL::Create(GSVSyncMode vsync_mode, bool allow_present_throttle)
 		return false;
 
 	// Image load store and GLSL 420pack is core in GL4.2, no need to check.
-	m_features.cas_sharpening = ((GLAD_GL_VERSION_4_2 && GLAD_GL_ARB_compute_shader) || GLAD_GL_ES_VERSION_3_2) && CreateCASPrograms();
+	// NOTE: CAS uses a desktop-GL compute shader (cas.glsl is "#version 420" +
+	// "#extension GL_ARB_compute_shader") — that source is invalid GLSL ES. On
+	// devices whose driver only gives a GL ES 3.2 context (e.g. Adreno 650 on the
+	// Retroid Pocket Mini, where the desktop 4.2 context request fails and we fall
+	// back to ES), feeding the ES compiler that shader hard-crashes the driver
+	// during GS init. So gate CAS to a real desktop-GL 4.2 context only; ES devices
+	// just go without the sharpening filter (TV/CRT present shaders are unaffected —
+	// they use the ES-aware "#version 320 es" header and compile fine).
+	m_features.cas_sharpening = (GLAD_GL_VERSION_4_2 && GLAD_GL_ARB_compute_shader) && CreateCASPrograms();
+	Console.WriteLn("@@ANDROID_GL_INIT@@ stage=postproc_done");
 
 	// ****************************************************************
 	// rasterization configuration
@@ -586,10 +623,13 @@ bool GSDeviceOGL::Create(GSVSyncMode vsync_mode, bool allow_present_throttle)
 	{
 		GL_PUSH("GSDeviceOGL::Rasterization");
 
-		glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+		if (!m_is_gles) {
+			glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+			glDisable(GL_MULTISAMPLE);
+		}
+
 		glDisable(GL_CULL_FACE);
 		glEnable(GL_SCISSOR_TEST);
-		glDisable(GL_MULTISAMPLE);
 
 		glDisable(GL_DITHER); // Honestly I don't know!
 
@@ -629,12 +669,22 @@ bool GSDeviceOGL::Create(GSVSyncMode vsync_mode, bool allow_present_throttle)
 	// Change depth convention
 	if (GLAD_GL_ARB_clip_control)
 		glClipControl(GL_LOWER_LEFT, GL_ZERO_TO_ONE);
+	else if (m_is_gles && GLAD_GL_EXT_clip_control)
+		// GLES has no ARB_clip_control; GL_EXT_clip_control (advertised by Adreno, and
+		// some Mali) is the same API/enums. Without it, GLES uses the legacy z-remap that
+		// CLAMPS PS2 Z >= 2^24 to the far plane (tfx_vgs.glsl), collapsing far depth so
+		// large-Z world geometry z-fights/vanishes — e.g. God of War II's transparent
+		// walls. Pairs with HAS_CLIP_CONTROL below (same condition) so the shader matches.
+		glClipControlEXT(GL_LOWER_LEFT_EXT, GL_ZERO_TO_ONE_EXT);
 
+	Console.WriteLn("@@ANDROID_GL_INIT@@ stage=date_raster_done");
 	// ****************************************************************
 	// HW renderer shader
 	// ****************************************************************
+	Console.WriteLn("@@ANDROID_GL_INIT@@ stage=texturefx_begin");
 	if (!CreateTextureFX())
 		return false;
+	Console.WriteLn("@@ANDROID_GL_INIT@@ stage=texturefx_done");
 
 	// ****************************************************************
 	// Pbo Pool allocation
@@ -657,6 +707,8 @@ bool GSDeviceOGL::Create(GSVSyncMode vsync_mode, bool allow_present_throttle)
 	if (!CreateImGuiProgram())
 		return false;
 
+	// GLES has no pipeline-statistics queries; this extension is desktop-GL only,
+	// so on Android this stays false and the OSD line shows 0 / degrades gracefully.
 	m_gpu_pipeline_statistics_supported = (GLAD_GL_ARB_pipeline_statistics_query != 0);
 
 	// Basic to ensure structures are correctly packed
@@ -666,11 +718,15 @@ bool GSDeviceOGL::Create(GSVSyncMode vsync_mode, bool allow_present_throttle)
 	static_assert(sizeof(OMDepthStencilSelector) == 1, "Wrong OMDepthStencilSelector size");
 	static_assert(sizeof(OMColorMaskSelector) == 1, "Wrong OMColorMaskSelector size");
 
+	Console.WriteLn("@@ANDROID_GL_INIT@@ stage=create_done");
 	return true;
 }
 
 void GSDeviceOGL::Destroy()
 {
+	// Frees GL objects, so it has to run before the context is dropped below.
+	DestroyShaderChain();
+
 	GSDevice::Destroy();
 
 	if (m_gl_context)
@@ -724,30 +780,75 @@ bool GSDeviceOGL::CheckFeatures()
 
 	memset(&m_bugs, 0, sizeof(m_bugs));
 
-	const char* vendor = (const char*)glGetString(GL_VENDOR);
-	if (std::strstr(vendor, "Advanced Micro Devices") || std::strstr(vendor, "ATI Technologies Inc.") ||
-		std::strstr(vendor, "ATI"))
+	bool vendor_id_mali = false;
+	bool vendor_id_adreno = false;
+
+	const char* vendor_raw = (const char*)glGetString(GL_VENDOR);
+	const char* renderer_raw = (const char*)glGetString(GL_RENDERER);
+	const char* vendor_str = vendor_raw ? vendor_raw : "";
+	const char* renderer_str = renderer_raw ? renderer_raw : "";
+
+	if (std::strstr(vendor_str, "Advanced Micro Devices") || std::strstr(vendor_str, "ATI Technologies Inc.") ||
+		std::strstr(vendor_str, "ATI"))
 	{
 		Console.WriteLn(Color_StrongRed, "GL: AMD GPU detected.");
 		//vendor_id_amd = true;
 	}
-	else if (std::strstr(vendor, "NVIDIA Corporation"))
+	else if (std::strstr(vendor_str, "NVIDIA Corporation"))
 	{
 		Console.WriteLn(Color_StrongGreen, "GL: NVIDIA GPU detected.");
 		//vendor_id_nvidia = true;
 		m_bugs.broken_blend_coherency = true;
 	}
-	else if (std::strstr(vendor, "Intel"))
+	else if (std::strstr(vendor_str, "Intel"))
 	{
 		Console.WriteLn(Color_StrongBlue, "GL: Intel GPU detected.");
 		//vendor_id_intel = true;
 	}
+	else if (std::strstr(vendor_str, "ARM") || std::strstr(renderer_str, "Mali"))
+	{
+		Console.WriteLn(Color_Yellow, "GL: ARM Mali GPU detected.");
+		vendor_id_mali = true;
+	}
+	else if (std::strstr(vendor_str, "Qualcomm") || std::strstr(renderer_str, "Adreno"))
+	{
+		Console.WriteLn(Color_Cyan, "GL: Qualcomm Adreno GPU detected.");
+		vendor_id_adreno = true;
+	}
+
+#if defined(__ANDROID__)
+	// ANGLE (GLES-on-Vulkan) reports the underlying GPU in GL_RENDERER, e.g.
+	// "ANGLE (ARM, Vulkan 1.1.177 (Mali-G77 MC9 ...))", so the native Mali profile and its vendor
+	// extensions (GL_ARM_shader_framebuffer_fetch, tile optimisations) engage through ANGLE too —
+	// and that is desirable: they are a large performance win on Mali (dropping them measurably
+	// regressed FPS on Mali-G615). The Mali-G77 crash under ANGLE was NOT these hacks but stale
+	// program binaries from the native driver being fed to ANGLE's glProgramBinary(); that is
+	// fixed at the source in GLShaderCache (driver-keyed cache), so no per-GPU profile gating here.
+	const GpuProfileSelection profile_selection =
+		GpuProfileDetector::Resolve(GSConfig.AndroidGpuProfileOverride, vendor_str, renderer_str);
+	SetRuntimeGPUProfile(profile_selection.runtime_profile);
+	SetMobileGPUIdentity(profile_selection.gpu);
+	SetMobileGSTuning(profile_selection.gs_tuning);
+	SetMediaTekSoC(profile_selection.is_mediatek_soc);
+	Console.WriteLn("GL: GPU profile override='%s' resolved='%s'.",
+		GpuProfileDetector::OverrideToConfigString(profile_selection.override_mode),
+		GpuProfileDetector::RuntimeProfileToString(profile_selection.runtime_profile));
+	DevCon.WriteLn("GL: GPU profile hints: %s", profile_selection.hints.c_str());
+	bool use_mali_profile = IsMaliGPUProfile();
+	bool use_adreno_profile = IsAdrenoGPUProfile();
+	bool use_powervr_profile = IsPowerVRGPUProfile();
+#else
+	SetRuntimeGPUProfile(vendor_id_mali ? RuntimeGpuProfile::Mali : RuntimeGpuProfile::Adreno);
+	bool use_mali_profile = vendor_id_mali;
+	bool use_adreno_profile = vendor_id_adreno;
+	bool use_powervr_profile = false;
+#endif
 
 	GLint major_gl = 0;
 	GLint minor_gl = 0;
 	glGetIntegerv(GL_MAJOR_VERSION, &major_gl);
 	glGetIntegerv(GL_MINOR_VERSION, &minor_gl);
-	if (!GLAD_GL_VERSION_3_3)
+	if (!m_is_gles && !GLAD_GL_VERSION_3_3)
 	{
 		Host::ReportErrorAsync(
 			"GS", fmt::format(TRANSLATE_FS("GSDeviceOGL", "OpenGL renderer is not supported. Only OpenGL {}.{}\n was found"), major_gl, minor_gl));
@@ -774,24 +875,28 @@ bool GSDeviceOGL::CheckFeatures()
 	}
 	DevCon.WriteLn(std::move(extensions));
 
-	if (!GLAD_GL_ARB_shading_language_420pack)
-	{
-		Host::ReportFormattedErrorAsync(
-			"GS", "GL_ARB_shading_language_420pack is not supported, this is required for the OpenGL renderer.");
-		return false;
+	if (!m_is_gles) {
+		if (!GLAD_GL_ARB_shading_language_420pack)
+		{
+			Host::ReportFormattedErrorAsync(
+					"GS", "GL_ARB_shading_language_420pack is not supported, this is required for the OpenGL renderer.");
+			return false;
+		}
+
+		if (!GLAD_GL_VERSION_4_3 && !GLAD_GL_ARB_copy_image && !GLAD_GL_EXT_copy_image && !GLAD_GL_NV_copy_image)
+		{
+			Host::AddOSDMessage(
+				"GL_ARB_copy_image is not supported, copies will be slower.", Host::OSD_ERROR_DURATION);
+		}
+
+		if (!GLAD_GL_VERSION_4_5 && !GLAD_GL_ARB_clip_control &&
+			!(m_is_gles && GLAD_GL_EXT_clip_control))
+		{
+			Host::AddOSDMessage(
+				"GL_ARB_clip_control is not supported, depth will be less accurate.", Host::OSD_ERROR_DURATION);
+		}
 	}
 
-	if (!GLAD_GL_VERSION_4_3 && !GLAD_GL_ARB_copy_image && !GLAD_GL_EXT_copy_image && !GLAD_GL_NV_copy_image)
-	{
-		Host::AddOSDMessage(
-			"GL_ARB_copy_image is not supported, copies will be slower.", Host::OSD_ERROR_DURATION);
-	}
-
-	if (!GLAD_GL_VERSION_4_5 && !GLAD_GL_ARB_clip_control)
-	{
-		Host::AddOSDMessage(
-			"GL_ARB_clip_control is not supported, depth will be less accurate.", Host::OSD_ERROR_DURATION);
-	}
 
 	if (!GLAD_GL_ARB_viewport_array)
 	{
@@ -810,8 +915,8 @@ bool GSDeviceOGL::CheckFeatures()
 		{
 			glTextureBarrier = ReplaceGL::TextureBarrier;
 			m_features.multidraw_fb_copy = true;
-			Host::AddOSDMessage(
-				"GL_ARB_texture_barrier is not supported, blending will be slower.", Host::OSD_ERROR_DURATION);
+/*			Host::AddOSDMessage(
+				"GL_ARB_texture_barrier is not supported, blending will be slower.", Host::OSD_ERROR_DURATION);*/
 		}
 	}
 
@@ -821,9 +926,54 @@ bool GSDeviceOGL::CheckFeatures()
 		Emulate_DSA::Init();
 	}
 
+	// glDrawElementsBaseVertex entered core in GL ES 3.2. ANGLE-over-Vulkan caps its context at
+	// ES 3.1, so GLAD leaves the UNSUFFIXED core pointer NULL even though ANGLE advertises
+	// GL_OES/EXT_draw_elements_base_vertex (whose suffixed entry points ARE loaded). Every draw
+	// path calls the unsuffixed glDrawElementsBaseVertex directly (RenderImGui + DrawIndexedPrimitive),
+	// so on ANGLE the first overlay draw jumped to a null pointer and aborted via the fastmem SIGSEGV
+	// handler (Mali-G77 / Retroid Pocket 4 Pro). Native Mali/Adreno report ES 3.2 so the core pointer
+	// is non-null there — which is why this only bit ANGLE. Alias it to the OES/EXT variant, matching
+	// the glTextureBarrier = glTextureBarrierNV replacement above. Fixes all call sites at once.
+	if (!glDrawElementsBaseVertex)
+	{
+		if (GLAD_GL_OES_draw_elements_base_vertex && glDrawElementsBaseVertexOES)
+			glDrawElementsBaseVertex = glDrawElementsBaseVertexOES;
+		else if (GLAD_GL_EXT_draw_elements_base_vertex && glDrawElementsBaseVertexEXT)
+			glDrawElementsBaseVertex = glDrawElementsBaseVertexEXT;
+		else
+			Console.Error("GL: glDrawElementsBaseVertex is unavailable (no core/OES/EXT) — draws will fail.");
+	}
+
+	// glColorMaski (indexed color mask) is core in GLSL ES 3.2 but only extension-provided on
+	// an ES 3.1 context; GLAD leaves the unsuffixed pointer null on ANGLE (which caps at ES 3.1),
+	// so GSDeviceOGL::OMSetColorMaskState calls a null pointer → SIGSEGV mid-render (VSync→Merge→
+	// GetOutput→StretchRect). ANGLE exposes the suffixed variant via GL_OES/EXT_draw_buffers_indexed,
+	// so alias to it. Same class of fix as glDrawElementsBaseVertex above.
+	if (!glColorMaski)
+	{
+		if (GLAD_GL_OES_draw_buffers_indexed && glColorMaskiOES)
+			glColorMaski = glColorMaskiOES;
+		else if (GLAD_GL_EXT_draw_buffers_indexed && glColorMaskiEXT)
+			glColorMaski = glColorMaskiEXT;
+		else
+			Console.Error("GL: glColorMaski is unavailable (no core/OES/EXT) — draws will fail.");
+	}
+
 	// Don't use PBOs when we don't have ARB_buffer_storage, orphaning buffers probably ends up worse than just
 	// using the normal texture update routines and letting the driver take care of it.
-	m_bugs.buggy_pbo = !GLAD_GL_VERSION_4_4 && !GLAD_GL_ARB_buffer_storage && !GLAD_GL_EXT_buffer_storage;
+	if (!m_is_gles) {
+		m_bugs.buggy_pbo = !GLAD_GL_VERSION_4_4 && !GLAD_GL_ARB_buffer_storage && !GLAD_GL_EXT_buffer_storage;
+	} else {
+		// Mirrors the desktop check: PBOs are useful only when EXT_buffer_storage
+		// (the GLES port of buffer_storage) is available so we can pin a
+		// persistent-mapped staging region. Without it the orphaning fallback
+		// is slower than letting the driver handle the upload directly. The
+		// previous form here had the test inverted (set buggy=TRUE when the
+		// extension WAS supported), disabling PBOs on every modern Adreno/Mali
+		// device. Aligning with the desktop branch's polarity.
+		m_bugs.buggy_pbo = !GLAD_GL_EXT_buffer_storage;
+	}
+
 	if (m_bugs.buggy_pbo)
 		Console.Warning("GL: Not using PBOs for texture uploads because buffer_storage is unavailable.");
 
@@ -837,7 +987,13 @@ bool GSDeviceOGL::CheckFeatures()
 	m_features.broken_point_sampler = false;
 	m_features.primitive_id = true;
 
-	m_features.framebuffer_fetch = GLAD_GL_EXT_shader_framebuffer_fetch;
+	// GLES may omit dual-source blending (GL_EXT/ARB_blend_func_extended); desktop GL always has it.
+	// When absent, GSRendererHW emulates SRC1 blend equations in-shader per-draw rather than forcing
+	// a global high blending-accuracy level (Mali no longer needs Blending=Max). From sashkinbro/EmuCoreX.
+	m_features.dual_source_blend =
+		!m_is_gles || GLAD_GL_EXT_blend_func_extended || GLAD_GL_ARB_blend_func_extended;
+
+	m_features.framebuffer_fetch = (GLAD_GL_ARM_shader_framebuffer_fetch || GLAD_GL_EXT_shader_framebuffer_fetch);
 	if (m_features.framebuffer_fetch && GSConfig.DisableFramebufferFetch)
 	{
 		Host::AddOSDMessage(
@@ -878,6 +1034,135 @@ bool GSDeviceOGL::CheckFeatures()
 	{
 		// Multidraw fb copy can do depth feedback just fine
 		m_features.depth_feedback |= GSConfig.DepthFeedbackMode == GSDepthFeedbackMode::Auto;
+	}
+
+	// ARMSX2 (Adreno GLES only; inert on every other GPU/profile). Adreno's driver
+	// rejects a fragment shader declaring TWO framebuffer-fetch `inout` outputs (o_col0
+	// colour + o_col1 depth), which the depth-as-colour SW-Z path emits for accurate-
+	// alpha-test draws -> link failure -> garbage (Everybody's Golf 4 / Minna no Golf 4).
+	// Route depth feedback through the depth path (a single fetch output) so it links, and
+	// read prior depth via the coherent ARM depth-stencil fetch (gl_LastFragDepthARM) when
+	// available -- the mode-1 depth sampler read is incoherent on GLES (no barrier on a
+	// sampled depth attachment) and makes occluded triangles poke through as white shards.
+	// Only overrides Auto; an explicit DepthFeedbackMode choice is honoured. The GPU
+	// profile is already resolved above (SetRuntimeGPUProfile), so IsAdrenoGPUProfile()
+	// is valid here.
+	if (m_features.framebuffer_fetch && IsAdrenoGPUProfile() &&
+		GSConfig.DepthFeedbackMode == GSDepthFeedbackMode::Auto)
+	{
+		m_features.depth_feedback = true;
+		m_arm_depth_fetch = GLAD_GL_ARM_shader_framebuffer_fetch_depth_stencil;
+		Console.WriteLn(m_arm_depth_fetch
+			? "GL: Adreno - depth feedback via coherent ARM depth-stencil fetch (gl_LastFragDepthARM)."
+			: "GL: Adreno - routing depth feedback through the depth sampler "
+			  "(avoids the dual framebuffer-fetch output link failure).");
+	}
+
+	// Mobile tile-based GPU profiles. Both Mali and Adreno prefer fresh
+	// textures over reused ones (avoids tile-flush stalls on partial
+	// writes), so the texture-pool hint is shared. Mali additionally
+	// pins framebuffer_fetch to the ARM extension and (on Auto) reuses
+	// it as the texture-barrier substitute — matched by the
+	// `#if GPU_PROFILE_MALI` branch in tfx_fs.glsl which picks
+	// gl_LastFragColorARM. Adreno + Generic fall through to the EXT/PLS
+	// inout path in the shader's `#else` arm; GPU_PROFILE_ADRENO is
+	// emitted but not currently consumed by any shader.
+	if (use_mali_profile || use_adreno_profile || use_powervr_profile)
+		m_features.prefer_new_textures = true;
+
+	if (use_mali_profile)
+	{
+		// Mali path prefers ARM_shader_framebuffer_fetch (gl_LastFragColorARM) because
+		// the EXT inout path has been broken across every tested Mali driver. If a
+		// device was force-overridden to Mali but lacks ARM fbfetch (rare but
+		// possible), demote to PowerVR profile which uses the same EXT/PLS path the
+		// catch-all default uses.
+		if (GLAD_GL_ARM_shader_framebuffer_fetch)
+		{
+			Console.WriteLn(Color_Yellow, "GL: Applying Mali-specific optimizations for tile-based rendering.");
+			m_features.framebuffer_fetch = true;
+			if (GSConfig.OverrideTextureBarriers == -1)
+			{
+				m_features.texture_barrier = m_features.framebuffer_fetch;
+				Console.WriteLn("GL: Mali optimization - using ARM framebuffer fetch over texture barriers.");
+			}
+		}
+		else
+		{
+			Console.Warning("GL: Mali profile selected but ARM framebuffer fetch is unavailable; demoting to PowerVR/EXT profile.");
+			SetRuntimeGPUProfile(RuntimeGpuProfile::PowerVR);
+			use_mali_profile = false;
+			use_powervr_profile = true;
+		}
+	}
+
+	if (use_powervr_profile)
+	{
+		// PowerVR (Imagination) is tile-based like Mali but ships EXT/PLS fbfetch
+		// (PLS originated on PowerVR). framebuffer_fetch + texture_barrier values
+		// from line ~882/908 already reflect the EXT path, so no override needed —
+		// just confirm the path is wired up.
+		Console.WriteLn(Color_Yellow, "GL: PowerVR profile active (EXT/PLS framebuffer fetch).");
+	}
+	else if (use_adreno_profile)
+	{
+		Console.WriteLn(Color_Cyan, "GL: Adreno profile active (EXT/PLS framebuffer fetch).");
+
+		// Adreno's GLES driver rejects a fragment shader that declares TWO
+		// framebuffer-fetch `inout` outputs. The depth-as-colour feedback path
+		// (DEPTH_FEEDBACK_SUPPORT 2) emits exactly that whenever the colour output
+		// already needs fetch AND a SW-Z depth draw is in flight -- o_col0 (colour
+		// fetch) at location 0 and o_col1 (depth fetch) at location 1 both become
+		// `inout`. That combination is produced by the accurate-alpha-test RGB-only
+		// + depth-write path, so any game carrying accurateAlphaTest (e.g. Everybody's
+		// Golf 4 / Minna no Golf 4, SCKA-20057 / SCPS-15059) fails to link those draws
+		// -> "Output o_col1 location or component exceeds max allowed" -> garbage
+		// (black-boxed faces, a floating RT rectangle, blue bars). Vulkan is unaffected
+		// (real depth attachment, no second fetch output). Route depth feedback through
+		// the real depth sampler (DEPTH_FEEDBACK_SUPPORT 1) so only o_col0 is a fetch
+		// output and the program links. test_and_sample_depth is already true above,
+		// and texture_barrier==true here keeps the DS-clone path (bind at ~3402) inert.
+		// Only override Auto -- an explicit DepthFeedbackMode choice is honoured.
+		if (m_features.framebuffer_fetch && GSConfig.DepthFeedbackMode == GSDepthFeedbackMode::Auto)
+		{
+			m_features.depth_feedback = true;
+			// The mode-1 depth SAMPLER read is incoherent on GLES (no texture_barrier
+			// for a sampled depth attachment) -> stale reads make occluded/interior
+			// triangles poke through as white shards. When the coherent ARM depth-
+			// stencil fetch extension is present, read prior depth via gl_LastFragDepthARM
+			// instead (tile-local, one output, no sampler, no feedback-loop bind).
+			m_arm_depth_fetch = GLAD_GL_ARM_shader_framebuffer_fetch_depth_stencil;
+			Console.WriteLn(m_arm_depth_fetch
+				? "GL: Adreno - depth feedback via coherent ARM depth-stencil fetch (gl_LastFragDepthARM)."
+				: "GL: Adreno - routing depth feedback through the depth sampler "
+				  "(avoids the dual framebuffer-fetch output link failure).");
+		}
+	}
+
+	{
+		const bool has_arm_fetch = GLAD_GL_ARM_shader_framebuffer_fetch;
+		const bool has_ext_fetch = GLAD_GL_EXT_shader_framebuffer_fetch;
+		const bool has_pls_fetch = GLAD_GL_EXT_shader_pixel_local_storage;
+		Console.WriteLn("GL: Framebuffer fetch extension caps: arm=%d ext=%d pls=%d.",
+			has_arm_fetch ? 1 : 0, has_ext_fetch ? 1 : 0, has_pls_fetch ? 1 : 0);
+
+		const char* active_profile_name = use_mali_profile ? "Mali" :
+			(use_powervr_profile ? "PowerVR" :
+			(use_adreno_profile ? "Adreno" : "Generic"));
+		const char* active_fetch_backend = "None";
+		if (m_features.framebuffer_fetch)
+		{
+			if (use_mali_profile)
+				active_fetch_backend = "ARM";
+			else if (has_ext_fetch || has_pls_fetch)
+				active_fetch_backend = "EXT/PLS";
+			else if (has_arm_fetch)
+				active_fetch_backend = "ARM";
+		}
+		Console.WriteLn("GL: Active framebuffer fetch backend (%s profile): %s.", active_profile_name, active_fetch_backend);
+
+		if (use_mali_profile && !has_arm_fetch)
+			Console.Warning("GL: Mali profile selected but ARM framebuffer fetch is unavailable; using non-fetch fallback.");
 	}
 
 	if (GLAD_GL_ARB_shader_storage_buffer_object)
@@ -925,7 +1210,13 @@ void GSDeviceOGL::SetSwapInterval()
 	m_vsync_mode = (m_vsync_mode == GSVSyncMode::Mailbox) ? GSVSyncMode::FIFO : m_vsync_mode;
 
 	// Window framebuffer has to be bound to call SetSwapInterval.
-	const s32 interval = static_cast<s32>(m_vsync_mode == GSVSyncMode::FIFO);
+	s32 interval = static_cast<s32>(m_vsync_mode == GSVSyncMode::FIFO);
+	// ARM Mali GLES breaks with eglSwapInterval(0): after a handful of swaps the surface
+	// stops presenting entirely (frozen screen). Never pass 0 on Mali — force interval 1.
+	// A forced-on vsync beats a frozen display, and the FIFO present pacer still lets
+	// fast-forward exceed the panel rate via dropped presents. (cf. Dolphin BUG_BROKEN_VSYNC)
+	if (interval == 0 && IsMaliGPUProfile())
+		interval = 1;
 	GLint current_fbo = 0;
 	glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &current_fbo);
 	glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
@@ -1094,6 +1385,18 @@ GSDevice::PresentResult GSDeviceOGL::BeginPresent(bool frame_skip)
 	OMSetFBO(0);
 	OMSetColorMaskState();
 
+	// On TBDR, hint that the default framebuffer's prior content is throwaway
+	// before the tile is loaded for the present quad. The color attachment is
+	// fully overwritten by the clear+blit below, and depth/stencil are never
+	// used at all on the system framebuffer. Default-FBO uses GL_COLOR / DEPTH
+	// / STENCIL (not GL_*_ATTACHMENT). Pure TBDR tile-bandwidth win and inert on
+	// desktop immediate renderers, so gated to GLES to keep the desktop path canonical.
+	if (m_is_gles)
+	{
+		const GLenum attachments[] = {GL_COLOR, GL_DEPTH, GL_STENCIL};
+		glInvalidateFramebuffer(GL_DRAW_FRAMEBUFFER, std::size(attachments), attachments);
+	}
+
 	glDisable(GL_SCISSOR_TEST);
 	glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
 	glClear(GL_COLOR_BUFFER_BIT);
@@ -1112,6 +1415,16 @@ void GSDeviceOGL::EndPresent()
 
 	if (m_gpu_timing_enabled)
 		PopTimestampQuery();
+
+	// Discard the default framebuffer's depth/stencil before the swap. We
+	// never wrote anything meaningful to them, so on TBDR drivers writing
+	// the tile back to system memory at SwapBuffers is wasted bandwidth.
+	// Color is preserved (it's what gets presented). GLES/TBDR-only (inert on desktop).
+	if (m_is_gles)
+	{
+		const GLenum attachments[] = {GL_DEPTH, GL_STENCIL};
+		glInvalidateFramebuffer(GL_DRAW_FRAMEBUFFER, std::size(attachments), attachments);
+	}
 
 	m_gl_context->SwapBuffers();
 
@@ -1148,6 +1461,27 @@ void GSDeviceOGL::PopTimestampQuery()
 {
 	while (m_waiting_timestamp_queries > 0)
 	{
+#if defined(__ANDROID__)
+		// GLES doesn't expose glGetQueryObjectiv / glGetQueryObjectui64v; both
+		// availability and result use the u32 form. Caps at ~4.29s of
+		// nanoseconds — fine for per-frame timing. Provided by the
+		// EXT_disjoint_timer_query extension (GL_TIME_ELAPSED_EXT === 0x88BF
+		// === GL_TIME_ELAPSED here).
+		//
+		// Prior version of this branch was broken: it called glBeginQuery on
+		// the read slot then immediately tried to read its result (always 0,
+		// query never ended) and incremented m_waiting_timestamp_queries
+		// instead of decrementing — accumulator stayed stuck at 0 in HW
+		// renderer OSD ("GPU: 0%" symptom).
+		GLuint available = 0;
+		glGetQueryObjectuiv(m_timestamp_queries[m_read_timestamp_query], GL_QUERY_RESULT_AVAILABLE, &available);
+		if (!available)
+			break;
+
+		GLuint result = 0;
+		glGetQueryObjectuiv(m_timestamp_queries[m_read_timestamp_query], GL_QUERY_RESULT, &result);
+		m_accumulated_gpu_time += static_cast<float>(static_cast<double>(result) / 1000000.0);
+#else
 		GLint available = 0;
 		glGetQueryObjectiv(m_timestamp_queries[m_read_timestamp_query], GL_QUERY_RESULT_AVAILABLE, &available);
 
@@ -1157,6 +1491,7 @@ void GSDeviceOGL::PopTimestampQuery()
 		u64 result = 0;
 		glGetQueryObjectui64v(m_timestamp_queries[m_read_timestamp_query], GL_QUERY_RESULT, &result);
 		m_accumulated_gpu_time += static_cast<float>(static_cast<double>(result) / 1000000.0);
+#endif
 		m_read_timestamp_query = (m_read_timestamp_query + 1) % NUM_TIMESTAMP_QUERIES;
 		m_waiting_timestamp_queries--;
 	}
@@ -1164,7 +1499,6 @@ void GSDeviceOGL::PopTimestampQuery()
 	if (m_timestamp_query_started)
 	{
 		glEndQuery(GL_TIME_ELAPSED);
-
 		m_write_timestamp_query = (m_write_timestamp_query + 1) % NUM_TIMESTAMP_QUERIES;
 		m_timestamp_query_started = false;
 		m_waiting_timestamp_queries++;
@@ -1201,8 +1535,15 @@ float GSDeviceOGL::GetAndResetAccumulatedGPUTime()
 	return value;
 }
 
+// NOTE: These GL pipeline-statistics queries are desktop-GL only. GLES (Android)
+// has neither GL_ARB_pipeline_statistics_query nor the glGetQueryObjectiv /
+// glGetQueryObjectui64v result readers (see PopTimestampQuery for the same
+// GLES gap), so the whole path is compiled out under __ANDROID__. On Android
+// m_gpu_pipeline_statistics_supported stays false and these are never invoked;
+// the OSD line just shows 0 / degrades to n/a. Real stats come from Vulkan.
 void GSDeviceOGL::PopPipelineStatisticsQuery()
 {
+#if !defined(__ANDROID__)
 	while (m_waiting_pipeline_statistics_queries > 0)
 	{
 		GLint available[2] = {};
@@ -1226,33 +1567,39 @@ void GSDeviceOGL::PopPipelineStatisticsQuery()
 		glEndQuery(GL_VERTEX_SHADER_INVOCATIONS_ARB);
 		glEndQuery(GL_FRAGMENT_SHADER_INVOCATIONS_ARB);
 
-		m_write_pipeline_statistics_query = (m_write_pipeline_statistics_query + 1) % NUM_TIMESTAMP_QUERIES;
+		m_write_pipeline_statistics_query = (m_write_pipeline_statistics_query + 1) % NUM_PIPELINE_STATISTICS_QUERIES;
 		m_pipeline_statistics_query_started = false;
 		m_waiting_pipeline_statistics_queries++;
 	}
+#endif
 }
 
 void GSDeviceOGL::KickPipelineStatisticsQuery()
 {
+#if !defined(__ANDROID__)
 	if (m_pipeline_statistics_query_started || m_waiting_pipeline_statistics_queries == NUM_PIPELINE_STATISTICS_QUERIES)
 		return;
 
 	glBeginQuery(GL_VERTEX_SHADER_INVOCATIONS_ARB, m_pipeline_statistics_queries[m_write_pipeline_statistics_query][0]);
 	glBeginQuery(GL_FRAGMENT_SHADER_INVOCATIONS_ARB, m_pipeline_statistics_queries[m_write_pipeline_statistics_query][1]);
 	m_pipeline_statistics_query_started = true;
+#endif
 }
 
 void GSDeviceOGL::CreatePipelineStatisticsQueries()
 {
+#if !defined(__ANDROID__)
 	for (int i = 0; i < NUM_PIPELINE_STATISTICS_QUERIES; i++)
 	{
 		glGenQueries(2, m_pipeline_statistics_queries[i].data());
 	}
 	KickPipelineStatisticsQuery();
+#endif
 }
 
 void GSDeviceOGL::DestroyPipelineStatisticsQueries()
 {
+#if !defined(__ANDROID__)
 	if (m_pipeline_statistics_queries[0][0] == 0)
 		return;
 
@@ -1271,6 +1618,7 @@ void GSDeviceOGL::DestroyPipelineStatisticsQueries()
 	m_write_pipeline_statistics_query = 0;
 	m_waiting_pipeline_statistics_queries = 0;
 	m_pipeline_statistics_query_started = false;
+#endif
 }
 
 GPUPipelineStatistics GSDeviceOGL::GetAndResetAccumulatedGPUPipelineStatistics()
@@ -1382,7 +1730,11 @@ void GSDeviceOGL::CommitClear(GSTexture* t, bool use_write_fbo)
 
 	if (T->GetState() == GSTexture::State::Invalidated)
 	{
-		if (GLAD_GL_VERSION_4_3)
+		// glInvalidateFramebuffer is core in GL 4.3 and GLES 3.0. The original
+		// gate skipped GLES, so on Adreno/Mali every "this content is dead"
+		// hint from the texture cache fell through to a no-op — the tile got
+		// written back to system memory anyway. On TBDR that's pure waste.
+		if (GLAD_GL_VERSION_4_3 || m_is_gles)
 		{
 			if (T->IsDepthStencil())
 			{
@@ -1551,29 +1903,95 @@ std::string GSDeviceOGL::GetShaderSource(const std::string_view entry, GLenum ty
 std::string GSDeviceOGL::GenGlslHeader(const std::string_view entry, GLenum type, const std::string_view macro)
 {
 	std::string header;
+    if (m_is_gles)
+    {
+        if (GLAD_GL_ES_VERSION_3_2)
+            header = "#version 320 es\n";
+        else if (GLAD_GL_ES_VERSION_3_1)
+            header = "#version 310 es\n";
 
-	if (m_features.vs_expand && GLAD_GL_VERSION_4_3)
-	{
+        // Vertex↔fragment interface blocks (out/in SHADER {}) are core only in GLSL ES
+        // 3.20. On an ES 3.1 context — notably ANGLE, which reports ES 3.1 and validates
+        // shaders strictly — they must be enabled explicitly or every TFX shader fails with
+        // "'out' : invalid qualifier: shader IO blocks need shader io block extension",
+        // leaving no valid programs (black screen, and downstream crashes when a null
+        // program is later bound). Native Mali is lenient and compiled these fine without
+        // it; ANGLE does not. Harmless where already core.
+        if (!GLAD_GL_ES_VERSION_3_2)
+        {
+            if (GLAD_GL_EXT_shader_io_blocks)
+                header += "#extension GL_EXT_shader_io_blocks : enable\n";
+            else if (GLAD_GL_OES_shader_io_blocks)
+                header += "#extension GL_OES_shader_io_blocks : enable\n";
+        }
+
+        if (GLAD_GL_EXT_blend_func_extended)
+            header += "#extension GL_EXT_blend_func_extended : require\n";
+        if (GLAD_GL_ARB_blend_func_extended)
+            header += "#extension GL_ARB_blend_func_extended : require\n";
+
+        if (m_features.framebuffer_fetch)
+        {
+            if (GLAD_GL_ARM_shader_framebuffer_fetch)
+                header += "#extension GL_ARM_shader_framebuffer_fetch : require\n";
+            else if (GLAD_GL_EXT_shader_framebuffer_fetch)
+                header += "#extension GL_EXT_shader_framebuffer_fetch : require\n";
+        }
+
+        // Coherent prior-depth read for SW-Z feedback (gl_LastFragDepthARM).
+        if (m_arm_depth_fetch)
+            header += "#extension GL_ARM_shader_framebuffer_fetch_depth_stencil : require\n";
+
+        header += "precision highp float;\n";
+        header += "precision highp int;\n";
+        header += "precision highp sampler2D;\n";
+        if (GLAD_GL_ES_VERSION_3_1)
+            header += "precision highp sampler2DMS;\n";
+        if (GLAD_GL_ES_VERSION_3_2)
+            header += "precision highp usamplerBuffer;\n";
+
+        if (!GLAD_GL_EXT_blend_func_extended && !GLAD_GL_ARB_blend_func_extended)
+        {
+            if (!GLAD_GL_ARM_shader_framebuffer_fetch)
+                fprintf(stderr, "Dual source blending is not supported\n");
+
+            header += "#define DISABLE_DUAL_SOURCE\n";
+        }
+    }
+    else {
 		// Intel's GL driver doesn't like the readonly qualifier with 3.3 GLSL.
-		header = "#version 430 core\n";
-	}
-	else
-	{
-		header = "#version 330 core\n";
-		header += "#extension GL_ARB_shading_language_420pack : require\n";
-		if (GLAD_GL_ARB_gpu_shader5)
-			header += "#extension GL_ARB_gpu_shader5 : require\n";
-		if (m_features.vs_expand)
-			header += "#extension GL_ARB_shader_storage_buffer_object: require\n";
-	}
+		if (m_features.vs_expand && GLAD_GL_VERSION_4_3)
+		{
+			header = "#version 430 core\n";
+		}
+		else
+		{
+			header = "#version 330 core\n";
+			header += "#extension GL_ARB_shading_language_420pack : require\n";
+			if (GLAD_GL_ARB_gpu_shader5)
+				header += "#extension GL_ARB_gpu_shader5 : require\n";
+			if (m_features.vs_expand)
+				header += "#extension GL_ARB_shader_storage_buffer_object: require\n";
+		}
 
-	if (m_features.framebuffer_fetch && GLAD_GL_EXT_shader_framebuffer_fetch)
-		header += "#extension GL_EXT_shader_framebuffer_fetch : require\n";
+		if (m_features.framebuffer_fetch && GLAD_GL_EXT_shader_framebuffer_fetch)
+			header += "#extension GL_EXT_shader_framebuffer_fetch : require\n";
+
+	}
 
 	if (m_features.framebuffer_fetch)
 		header += "#define HAS_FRAMEBUFFER_FETCH 1\n";
 	else
 		header += "#define HAS_FRAMEBUFFER_FETCH 0\n";
+
+	header += fmt::format("#define HAS_EXT_SHADER_FRAMEBUFFER_FETCH {}\n", GLAD_GL_EXT_shader_framebuffer_fetch ? 1 : 0);
+	header += fmt::format("#define HAS_ARM_SHADER_FRAMEBUFFER_FETCH {}\n", GLAD_GL_ARM_shader_framebuffer_fetch ? 1 : 0);
+	header += fmt::format("#define HAS_ARM_DEPTH_FETCH {}\n", m_arm_depth_fetch ? 1 : 0);
+	header += fmt::format("#define HAS_EXT_SHADER_PIXEL_LOCAL_STORAGE {}\n", GLAD_GL_EXT_shader_pixel_local_storage ? 1 : 0);
+	header += fmt::format("#define GPU_PROFILE_MALI {}\n", IsMaliGPUProfile() ? 1 : 0);
+	header += fmt::format("#define GPU_PROFILE_ADRENO {}\n", IsAdrenoGPUProfile() ? 1 : 0);
+	header += fmt::format("#define GPU_PROFILE_POWERVR {}\n", IsPowerVRGPUProfile() ? 1 : 0);
+	header += fmt::format("#define HAS_ARM_DEPTH_FETCH {}\n", m_arm_depth_fetch ? 1 : 0);
 
 	if (GLAD_GL_ARB_conservative_depth)
 	{
@@ -1598,7 +2016,8 @@ std::string GSDeviceOGL::GenGlslHeader(const std::string_view entry, GLenum type
 		header += "#define DEPTH_FEEDBACK_SUPPORT 2\n"; // Depth as RT
 	}
 
-	if (GLAD_GL_ARB_clip_control)
+	// Must match the glClipControl(EXT) enable above: desktop ARB, or GLES with EXT.
+	if (GLAD_GL_ARB_clip_control || (m_is_gles && GLAD_GL_EXT_clip_control))
 		header += "#define HAS_CLIP_CONTROL 1\n";
 	else
 		header += "#define HAS_CLIP_CONTROL 0\n";
@@ -2219,6 +2638,222 @@ void GSDeviceOGL::DoFXAA(GSTexture* sTex, GSTexture* dTex)
 	DoStretchRect(sTex, sRect, dTex, dRect, m_fxaa.ps, Biln);
 }
 
+#ifdef ARMSX2_HAS_LIBRASHADER
+
+static void ReportShaderChainError(const char* what, libra_error_t err)
+{
+	char* msg = nullptr;
+	if (libra_error_write(err, &msg) == 0 && msg)
+	{
+		Console.Error("(GS) librashader GL: %s failed: %s", what, msg);
+		libra_error_free_string(&msg);
+	}
+	else
+	{
+		Console.Error("(GS) librashader GL: %s failed (errno %d)", what, static_cast<int>(libra_error_errno(err)));
+	}
+	libra_error_free(&err);
+}
+
+// libra_gl_loader_t is a bare C function pointer with no userdata argument, so the context
+// has to be reachable without one. Only ever one GL device exists at a time (g_gs_device),
+// and the chain is created and run on the GS thread, so a file-static set at create time is
+// enough — no need to thread the device through.
+static GLContext* s_shader_chain_gl_context = nullptr;
+
+static const void* ShaderChainGLLoader(const char* name)
+{
+	return s_shader_chain_gl_context ? s_shader_chain_gl_context->GetProcAddress(name) : nullptr;
+}
+
+#endif
+
+void GSDeviceOGL::DestroyShaderChain()
+{
+#ifdef ARMSX2_HAS_LIBRASHADER
+	if (m_shader_chain)
+	{
+		libra_gl_filter_chain_t chain = static_cast<libra_gl_filter_chain_t>(m_shader_chain);
+		libra_gl_filter_chain_free(&chain);
+		m_shader_chain = nullptr;
+	}
+#endif
+	m_shader_chain_preset.clear();
+	m_shader_chain_failed = false;
+	m_shader_frame_count = 0;
+	m_shader_param_generation = 0;
+}
+
+void GSDeviceOGL::ApplyShaderChainParams()
+{
+#ifdef ARMSX2_HAS_LIBRASHADER
+	// Per-frame fast path: one atomic load. The lock and the copy only happen on the
+	// frames where the user actually moved something.
+	const u64 generation = GetShaderChainParamGeneration();
+	if (generation == m_shader_param_generation)
+		return;
+
+	std::vector<std::pair<std::string, float>> params;
+	if (GetShaderChainParams(m_shader_chain_preset, &params))
+	{
+		libra_gl_filter_chain_t chain = static_cast<libra_gl_filter_chain_t>(m_shader_chain);
+		for (const auto& [name, value] : params)
+		{
+			// A preset can be swapped under a stale override set, so an unknown parameter
+			// name is a routine miss, not a fault: report nothing and keep going, since
+			// the remaining names are still valid.
+			if (libra_error_t err = libra_gl_filter_chain_set_param(&chain, name.c_str(), value))
+				libra_error_free(&err);
+		}
+	}
+
+	// Set even when the store held another preset's values or none at all — otherwise this
+	// re-runs the lookup on every frame for as long as the generation stays ahead.
+	m_shader_param_generation = generation;
+#endif
+}
+
+void GSDeviceOGL::RestoreGLStateAfterShaderChain()
+{
+	// librashader backs up and restores the fixed-function *enables* itself (BLEND,
+	// CULL_FACE, DEPTH_TEST, STENCIL_TEST, SCISSOR_TEST, and PRIMITIVE_RESTART /
+	// FRAMEBUFFER_SRGB where supported) via an RAII guard, and it never touches the blend
+	// func/equation, depth func/mask, stencil func/op, or the scissor box — so all of those
+	// stay in sync with GLState on their own. What it does clobber and leave behind is the
+	// bound FBO (documented as "GL_FRAMEBUFFER is bound to 0" on return), VAO, program,
+	// texture units, sampler bindings, the viewport and the colour mask.
+	//
+	// GLState's setters are all early-return-if-unchanged, so a stale cache means the state
+	// would never be re-pushed and the next draw would silently render wrong. Rather than
+	// invalidate the cache (it has no "unknown" sentinel — GLState::Clear() asserts defaults,
+	// which is only true on a fresh context), push the cached values back into the driver so
+	// reality matches the cache again. Same shape as the end of RenderImGui().
+	glBindFramebuffer(GL_DRAW_FRAMEBUFFER, GLState::fbo);
+	glBindVertexArray(GLState::vao);
+	glViewport(0, 0, GLState::viewport.x, GLState::viewport.y);
+
+	const OMColorMaskSelector cms(GLState::wrgba);
+	glColorMaski(0, cms.wr, cms.wg, cms.wb, cms.wa);
+
+	// The chain binds a texture and a sampler per pass, starting at unit 0. Only the units
+	// GLState tracks matter; anything above them is never sampled by the TFX/utility draws.
+	for (u32 i = 0; i < std::size(GLState::tex_unit); i++)
+		glBindTextureUnit(i, GLState::tex_unit[i]);
+
+	// Sampler unit 0 is the tracked one. Unit 1 is special: m_palette_ss is bound there once
+	// at device creation and is expected to stay put for the device's lifetime (a sampler
+	// object can't be shared across image units, hence the dedicated one), so it has to be
+	// put back explicitly or every paletted texture silently samples wrong from here on.
+	// GSDeviceOGL never binds a sampler to the remaining units and expects them to fall back
+	// to the texture's own parameters, so any the chain left behind have to come back off.
+	glBindSampler(0, GLState::ps_ss);
+	glBindSampler(1, m_palette_ss);
+	for (u32 i = 2; i < std::size(GLState::tex_unit); i++)
+		glBindSampler(i, 0);
+
+	// The program cache is a file-static in GLProgram rather than part of GLState, and it
+	// has a purpose-built invalidator; the next Bind() re-pushes.
+	GLProgram::ResetLastProgram();
+}
+
+bool GSDeviceOGL::DoApplyShaderChain(GSTexture* sTex, GSTexture* dTex)
+{
+#ifndef ARMSX2_HAS_LIBRASHADER
+	return false;
+#else
+	// A preset that fails to compile must not be retried every frame — that would run a
+	// full slang compile 60x/sec. Latch the failure until the user picks another preset.
+	if (m_shader_chain_failed && m_shader_chain_preset == GSConfig.ShaderChainPreset)
+		return false;
+
+	if (!m_shader_chain || m_shader_chain_preset != GSConfig.ShaderChainPreset)
+	{
+		DestroyShaderChain();
+		m_shader_chain_preset = GSConfig.ShaderChainPreset;
+
+		libra_shader_preset_t preset = nullptr;
+		if (libra_error_t err = libra_preset_create(m_shader_chain_preset.c_str(), &preset))
+		{
+			ReportShaderChainError("preset load", err);
+			m_shader_chain_failed = true;
+			return false;
+		}
+
+		filter_chain_gl_opt_t opt = {};
+		opt.version = LIBRASHADER_CURRENT_VERSION;
+		// 0 means "detect from the context": librashader asks glow for the version and picks
+		// GLSL 300/310/320 ES on an ES context. Hardcoding 330 would emit desktop GLSL and
+		// break every GLES device.
+		opt.glsl_version = 0;
+		// DSA is GL 4.5+ and simply does not exist on GLES. This implicitly disables
+		// librashader's own shader cache, which is the documented trade-off.
+		opt.use_dsa = false;
+		opt.force_no_mipmaps = false;
+		opt.disable_cache = false;
+
+		// librashader resolves GL through this loader rather than linking it, the same way
+		// the Vulkan chain rides the user's ICD.
+		s_shader_chain_gl_context = m_gl_context.get();
+
+		// create() invalidates `preset` unconditionally ("the shader preset is
+		// immediately invalidated"), so it must NOT be freed afterwards on either path.
+		libra_gl_filter_chain_t chain = nullptr;
+		if (libra_error_t err = libra_gl_filter_chain_create(&preset, ShaderChainGLLoader, &opt, &chain))
+		{
+			ReportShaderChainError("chain create", err);
+			m_shader_chain_failed = true;
+			return false;
+		}
+
+		m_shader_chain = chain;
+		m_shader_frame_count = 0;
+		// The new chain sits at the preset's initial values, so whatever we last pushed is
+		// gone with the old one — force ApplyShaderChainParams to feed it again.
+		m_shader_param_generation = 0;
+		Console.WriteLn("(GS) librashader GL: loaded preset '%s'", m_shader_chain_preset.c_str());
+	}
+
+	// GS thread, chain alive, before the frame call — the only place a set_param is safe.
+	// Touches no GL state of its own (it writes librashader's own parameter map), so it is
+	// fine ahead of the GL_PUSH and needs no state restore.
+	ApplyShaderChainParams();
+
+	GL_PUSH("ApplyShaderChain");
+
+	GSTextureOGL* const src = static_cast<GSTextureOGL*>(sTex);
+	GSTextureOGL* const dst = static_cast<GSTextureOGL*>(dTex);
+
+	// librashader wants the sized internal format the texture was allocated with — that's
+	// m_gl_format (GL_RGBA8), the one handed to glTextureStorage2D, NOT m_int_format, which
+	// despite the name is the pixel-transfer format (GL_RGBA).
+	const libra_image_gl_t in = {src->GetID(), src->GetGLFormat(),
+		static_cast<uint32_t>(src->GetWidth()), static_cast<uint32_t>(src->GetHeight())};
+	const libra_image_gl_t out = {dst->GetID(), dst->GetGLFormat(),
+		static_cast<uint32_t>(dst->GetWidth()), static_cast<uint32_t>(dst->GetHeight())};
+	const libra_viewport_t vp = {0.0f, 0.0f,
+		static_cast<uint32_t>(dst->GetWidth()), static_cast<uint32_t>(dst->GetHeight())};
+
+	// Every librashader entry point takes the chain handle by address, not by value.
+	// Unlike Vulkan there's no command buffer — the chain issues its draws immediately.
+	libra_gl_filter_chain_t chain = static_cast<libra_gl_filter_chain_t>(m_shader_chain);
+	const libra_error_t err = libra_gl_filter_chain_frame(&chain, m_shader_frame_count, in, out, &vp, nullptr, nullptr);
+
+	// Unconditional: the chain can fail part-way through, having already clobbered state.
+	RestoreGLStateAfterShaderChain();
+
+	if (err)
+	{
+		ReportShaderChainError("frame", err);
+		m_shader_chain_failed = true;
+		return false;
+	}
+	m_shader_frame_count++;
+
+	dst->SetState(GSTexture::State::Dirty);
+	return true;
+#endif
+}
+
 bool GSDeviceOGL::CompileShadeBoostProgram()
 {
 	const std::optional<std::string> shader = ReadShaderSource("shaders/opengl/shadeboost.glsl");
@@ -2593,8 +3228,18 @@ void GSDeviceOGL::RenderBlankFrame()
 {
 	glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
 	glDisable(GL_SCISSOR_TEST);
+	if (m_is_gles) // GLES/TBDR-only tile-bandwidth hint; inert on desktop, gated to keep it canonical
+	{
+		const GLenum pre[] = {GL_COLOR, GL_DEPTH, GL_STENCIL};
+		glInvalidateFramebuffer(GL_DRAW_FRAMEBUFFER, std::size(pre), pre);
+	}
 	glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
 	glClear(GL_COLOR_BUFFER_BIT);
+	if (GLAD_GL_VERSION_4_3 || m_is_gles)
+	{
+		const GLenum post[] = {GL_DEPTH, GL_STENCIL};
+		glInvalidateFramebuffer(GL_DRAW_FRAMEBUFFER, std::size(post), post);
+	}
 	m_gl_context->SwapBuffers();
 	glBindFramebuffer(GL_DRAW_FRAMEBUFFER, GLState::fbo);
 	glEnable(GL_SCISSOR_TEST);
@@ -2975,7 +3620,10 @@ void GSDeviceOGL::RenderHW(GSHWDrawConfig& config)
 	if (m_features.texture_barrier && (config.require_one_barrier || config.require_full_barrier))
 		PSSetShaderResource(TEXTURE_RT, colclip_rt ? colclip_rt : config.rt);
 	if (m_features.texture_barrier && (config.require_one_barrier || config.require_full_barrier) && config.ps.IsFeedbackLoopDepth())
-		PSSetShaderResource(TEXTURE_DEPTH, m_features.depth_feedback ? config.ds : m_ds_as_rt);
+		// With ARM depth-stencil fetch the shader reads gl_LastFragDepthARM, not a
+		// sampler, so don't bind the live depth attachment as a texture (avoids a
+		// feedback-loop bind the driver may flag).
+		PSSetShaderResource(TEXTURE_DEPTH, (m_features.depth_feedback && !m_arm_depth_fetch) ? config.ds : m_ds_as_rt);
 
 	SetupSampler(config.sampler);
 
@@ -3074,15 +3722,17 @@ void GSDeviceOGL::RenderHW(GSHWDrawConfig& config)
 
 	// Avoid changing framebuffer just to switch from rt+depth to rt and vice versa.
 	bool fb_optimization_needs_barrier = false;
-	if (!(draw_rt || draw_ds_as_rt) && draw_ds && GLState::rt && GLState::rt->GetSize() == draw_ds->GetSize())
+	if (!draw_rt && GLState::rt && GLState::ds == draw_ds && config.tex != GLState::rt &&
+		draw_ds && GLState::rt->GetSize() == draw_ds->GetSize() && !draw_ds_as_rt)
 	{
 		draw_rt = GLState::rt;
-		fb_optimization_needs_barrier = !GLState::rt_written && GLState::ds == draw_ds;
+		fb_optimization_needs_barrier = !GLState::rt_written;
 	}
-	else if (!(draw_ds || draw_ds_as_rt) && draw_rt && GLState::ds && GLState::ds->GetSize() == draw_rt->GetSize())
+	else if (!draw_ds && GLState::ds && GLState::rt == draw_rt && config.tex != GLState::ds &&
+		draw_rt && GLState::ds->GetSize() == draw_rt->GetSize() && !draw_ds_as_rt)
 	{
 		draw_ds = GLState::ds;
-		fb_optimization_needs_barrier = !GLState::ds_written && GLState::rt == draw_rt;
+		fb_optimization_needs_barrier = !GLState::ds_written;
 	}
 
 	// Be careful of the rt already being bound and the blend using the RT without a barrier.
@@ -3101,7 +3751,6 @@ void GSDeviceOGL::RenderHW(GSHWDrawConfig& config)
 	{
 		// Requires a copy of the RT.
 		draw_rt_clone = CreateTexture(rtsize.x, rtsize.y, 1, draw_rt->GetFormat(), true);
-
 		if (!draw_rt_clone)
 			Console.Warning("GL: Failed to allocate temp texture for RT copy.");
 	}
@@ -3113,7 +3762,6 @@ void GSDeviceOGL::RenderHW(GSHWDrawConfig& config)
 	{
 		// Requires a copy of the DS.
 		draw_ds_clone = CreateTexture(rtsize.x, rtsize.y, 1, draw_ds->GetFormat(), true);
-
 		if (!draw_ds_clone)
 			Console.Warning("GL: Failed to allocate temp texture for DS copy.");
 	}

@@ -130,8 +130,18 @@ public:
 		VSSelector vs;
 		u8 pad[15];
 
-		__fi bool operator==(const ProgramSelector& p) const { return BitEqual(*this, p); }
-		__fi bool operator!=(const ProgramSelector& p) const { return !BitEqual(*this, p); }
+		// Compare ONLY the meaningful key fields, matching ProgramSelectorHash above
+		// (which hashes {vs.key, ps.key_hi, ps.key_lo}). BitEqual() memcmp'd all 32 bytes
+		// including this struct's uninitialized trailing/alignment padding, so two
+		// logically-identical selectors landed in the same hash bucket yet failed ==,
+		// making m_programs.find() miss every time. Result: the same shaders recompiled
+		// every frame (issue #243 — Jackie Chan Adventures: 142 unique shaders, 41k+
+		// recompiles, GS-thread pegged). Field compare is hash-consistent and padding-proof.
+		__fi bool operator==(const ProgramSelector& p) const
+		{
+			return vs.key == p.vs.key && ps.key_hi == p.ps.key_hi && ps.key_lo == p.ps.key_lo;
+		}
+		__fi bool operator!=(const ProgramSelector& p) const { return !(*this == p); }
 	};
 	static_assert(sizeof(ProgramSelector) == 32, "Program selector is 32 bytes");
 	static_assert(offsetof(ProgramSelector, pad) + sizeof(ProgramSelector::pad) == sizeof(ProgramSelector));
@@ -152,6 +162,8 @@ private:
 
 	std::unique_ptr<GLContext> m_gl_context;
 
+	bool m_is_gles = false;
+
 	struct
 	{
 		bool buggy_pbo              : 1; ///< Avoid PBOs and just use glTextureSubImage2D with immediate data
@@ -159,6 +171,10 @@ private:
 	} m_bugs;
 
 	bool m_disable_download_pbo = false;
+	// Adreno: read prior depth for SW-Z feedback via the coherent ARM depth-stencil
+	// fetch (gl_LastFragDepthARM) instead of the incoherent depth sampler, when the
+	// GL_ARM_shader_framebuffer_fetch_depth_stencil extension is present.
+	bool m_arm_depth_fetch = false;
 
 	GLuint m_fbo = 0; // frame buffer container
 	GLuint m_fbo_read = 0; // frame buffer container only for reading
@@ -281,18 +297,39 @@ private:
 	void PopTimestampQuery();
 	void KickTimestampQuery();
 
-	GSTexture* CreateSurface(GSTexture::Usage usage, int width, int height, int levels, GSTexture::Format format) override;
-
 	void CreatePipelineStatisticsQueries();
 	void DestroyPipelineStatisticsQueries();
 	void PopPipelineStatisticsQuery();
 	void KickPipelineStatisticsQuery();
+
+	GSTexture* CreateSurface(GSTexture::Usage usage, int width, int height, int levels, GSTexture::Format format) override;
 
 	void DoMerge(GSTexture* sTex[3], GSVector4* sRect, GSTexture* dTex, GSVector4* dRect, const GSRegPMODE& PMODE, const GSRegEXTBUF& EXTBUF, u32 c, const Filter filter) override;
 	void DoInterlace(GSTexture* sTex, const GSVector4& sRect, GSTexture* dTex, const GSVector4& dRect, ShaderInterlace shader, Filter filter, const InterlaceConstantBuffer& cb) override;
 
 	bool CompileFXAAProgram();
 	void DoFXAA(GSTexture* sTex, GSTexture* dTex) override;
+
+	bool DoApplyShaderChain(GSTexture* sTex, GSTexture* dTex) override;
+
+	/// librashader filter chain state. The handle is void* rather than
+	/// libra_gl_filter_chain_t so this header doesn't need librashader.h — that header
+	/// only exists when the Rust toolchain built the lib (ARMSX2_HAS_LIBRASHADER).
+	/// The chain is rebuilt only when the preset path changes: creating it compiles the
+	/// whole slang chain, while the per-frame call is just draw submission.
+	void* m_shader_chain = nullptr;
+	std::string m_shader_chain_preset;
+	bool m_shader_chain_failed = false;
+	size_t m_shader_frame_count = 0;
+	/// Last parameter-override generation pushed into m_shader_chain. Zeroed whenever the
+	/// chain is (re)created, because a new chain starts at the preset's initial values and
+	/// has to be re-fed regardless of whether the store changed.
+	u64 m_shader_param_generation = 0;
+	void DestroyShaderChain();
+	void ApplyShaderChainParams();
+	/// The chain binds its own program/VAO/FBO/textures and does not put them back, so
+	/// GLState's cache would go stale behind our back. Re-pushes what it clobbers.
+	void RestoreGLStateAfterShaderChain();
 
 	bool CompileShadeBoostProgram();
 	void DoShadeBoost(GSTexture* sTex, GSTexture* dTex, const float params[4]) override;

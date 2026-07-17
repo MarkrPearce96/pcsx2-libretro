@@ -233,6 +233,7 @@ void Pad::SetDefaultHotkeyConfig(SettingsInterface& si)
 	si.SetStringValue("Hotkeys", "Screenshot", "Keyboard/F8");
 	si.SetStringValue("Hotkeys", "GSDumpSingleFrame", "Keyboard/Shift & Keyboard/F8");
 	si.SetStringValue("Hotkeys", "ToggleSoftwareRendering", "Keyboard/F9");
+	si.SetStringValue("Hotkeys", "ToggleOSD", "Keyboard/F10");
 	//  si.SetStringValue("Hotkeys", "ToggleTextureDumping", "Keyboard"); TBD
 	//  si.SetStringValue("Hotkeys", "ToggleTextureReplacements", "Keyboard"); TBD
 	si.SetStringValue("Hotkeys", "ZoomIn", "Keyboard/Control & Keyboard/Plus");
@@ -332,8 +333,6 @@ void Pad::CopyConfiguration(SettingsInterface* dest_si, const SettingsInterface&
 {
 	if (copy_pad_config)
 	{
-		dest_si->CopyBoolValue(src_si, "Pad", "MultitapPort1");
-		dest_si->CopyBoolValue(src_si, "Pad", "MultitapPort2");
 		dest_si->CopyBoolValue(src_si, "Pad", "MultitapPort1");
 		dest_si->CopyBoolValue(src_si, "Pad", "MultitapPort2");
 		dest_si->CopyFloatValue(src_si, "Pad", "PointerXScale");
@@ -546,6 +545,12 @@ PadBase* Pad::GetPad(const u8 unifiedSlot)
 void Pad::SetControllerState(u32 controller, u32 bind, float value)
 {
 	if (controller >= NUM_CONTROLLER_PORTS)
+		return;
+
+	// Input can arrive before the pads are constructed (no VM yet) — e.g. the Android
+	// gyroscope overlay emits a neutral release the moment it first composes in the
+	// library. s_controllers[] is empty then, so guard the deref.
+	if (!s_controllers[controller])
 		return;
 
 	s_controllers[controller]->Set(bind, value);

@@ -29,6 +29,9 @@ public:
 	virtual std::unique_ptr<GLContext> CreateSharedContext(const WindowInfo& wi, Error* error) override;
 
 protected:
+	virtual bool SetDisplay();
+	virtual EGLNativeWindowType GetNativeWindow(EGLConfig config);
+
 	virtual EGLDisplay GetPlatformDisplay(Error* error);
 	virtual EGLSurface CreatePlatformSurface(EGLConfig config, void* win, Error* error);
 

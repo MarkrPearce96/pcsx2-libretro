@@ -17,6 +17,30 @@
 static DynamicLibrary s_egl_library;
 static std::atomic_uint32_t s_egl_refcount = 0;
 
+// ANGLE integration (ported from sashkinbro/EmuCoreX): when the app wants to run the
+// OpenGL renderer through ANGLE's GLES-on-Vulkan translation (Android only, driven by
+// the AndroidUseAngleOpenGL setting), the Kotlin side sets ARMSX2_ANGLE_EGL_LIBRARY to
+// the absolute path of the bundled libEGL_angle.so before the GS thread opens. When it's
+// present we load ANGLE's EGL instead of the system libEGL; ANGLE's libEGL then pulls in
+// libGLESv2_angle.so from the same native-lib dir. Inert (returns false) when the env var
+// is unset, so the default path is untouched.
+static bool TryLoadEGLFromOverride(Error* error)
+{
+#ifdef __ANDROID__
+	const char* egl_override = std::getenv("ARMSX2_ANGLE_EGL_LIBRARY");
+	if (!egl_override || !egl_override[0])
+		return false;
+
+	Console.WriteLnFmt("Loading ANGLE EGL from override {}...", egl_override);
+	if (s_egl_library.Open(egl_override, error))
+		return true;
+
+	Console.ErrorFmt("Failed to load ANGLE EGL from {}: {}", egl_override, error->GetDescription());
+#endif
+
+	return false;
+}
+
 static bool LoadEGL()
 {
 	// We're not going to be calling this from multiple threads concurrently.
@@ -25,10 +49,13 @@ static bool LoadEGL()
 	{
 		pxAssert(!s_egl_library.IsOpen());
 
+		Error error;
+		if (TryLoadEGLFromOverride(&error))
+			return true;
+
 		std::string egl_libname = DynamicLibrary::GetVersionedFilename("libEGL");
 		Console.WriteLnFmt("Loading EGL from {}...", egl_libname);
 
-		Error error;
 		if (!s_egl_library.Open(egl_libname.c_str(), &error))
 		{
 			// Try versioned.
@@ -94,6 +121,9 @@ bool GLContextEGL::Initialize(std::span<const Version> versions_to_try, Error* e
 	if (!LoadGLADEGL(EGL_NO_DISPLAY, error))
 		return false;
 
+	if (!SetDisplay())
+		return false;
+
 	m_display = GetPlatformDisplay(error);
 	if (m_display == EGL_NO_DISPLAY)
 		return false;
@@ -123,6 +153,28 @@ bool GLContextEGL::Initialize(std::span<const Version> versions_to_try, Error* e
 
 	Error::SetStringView(error, "Failed to create any context versions");
 	return false;
+}
+
+EGLNativeWindowType GLContextEGL::GetNativeWindow(EGLConfig config)
+{
+	return {};
+}
+
+bool GLContextEGL::SetDisplay()
+{
+#if defined(__ANDROID__)
+	// Android has no Mesa platform-display path, so bind the default display up front.
+	// On desktop this is a no-op so GetPlatformDisplay() below stays authoritative and
+	// the canonical Initialize() path (no eglGetDisplay pre-step, no extra abort gate)
+	// is preserved byte-for-byte.
+	m_display = eglGetDisplay(static_cast<EGLNativeDisplayType>(m_wi.display_connection));
+	if (!m_display)
+	{
+		Console.Error("eglGetDisplay() failed: %d", eglGetError());
+		return false;
+	}
+#endif
+	return true;
 }
 
 EGLDisplay GLContextEGL::GetPlatformDisplay(Error* error)
@@ -346,12 +398,25 @@ bool GLContextEGL::CreateSurface()
 			return CreatePBufferSurface();
 	}
 
-	Error error;
-	m_surface = CreatePlatformSurface(m_config, m_wi.window_handle, &error);
-	if (m_surface == EGL_NO_SURFACE)
+	EGLNativeWindowType native_window = GetNativeWindow(m_config);
+	if (native_window)
 	{
-		Console.ErrorFmt("Failed to create platform surface: {}", error.GetDescription());
-		return false;
+		m_surface = eglCreateWindowSurface(m_display, m_config, native_window, nullptr);
+		if (m_surface == EGL_NO_SURFACE)
+		{
+			Console.ErrorFmt("eglCreateWindowSurface() failed: 0x{:x}", eglGetError());
+			return false;
+		}
+	}
+	else
+	{
+		Error error;
+		m_surface = CreatePlatformSurface(m_config, m_wi.window_handle, &error);
+		if (m_surface == EGL_NO_SURFACE)
+		{
+			Console.ErrorFmt("Failed to create platform surface: {}", error.GetDescription());
+			return false;
+		}
 	}
 
 	// Some implementations may require the size to be queried at runtime.
@@ -435,14 +500,26 @@ void GLContextEGL::DestroySurface()
 
 bool GLContextEGL::CreateContext(const Version& version, EGLContext share_context)
 {
-	DevCon.WriteLnFmt("Trying GL version {}.{}", version.major_version, version.minor_version);
-	const int surface_attribs[] = {
-		EGL_RENDERABLE_TYPE,
-		EGL_OPENGL_BIT,
-		EGL_SURFACE_TYPE,
-		(m_wi.type != WindowInfo::Type::Surfaceless) ? EGL_WINDOW_BIT : 0,
-		EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8,
-		EGL_BLUE_SIZE, 8, EGL_NONE, 0};
+	Console.WriteLn("Trying version %u.%u (%s)", version.major_version, version.minor_version,
+		version.profile == Profile::ES ? "ES" : (version.profile == Profile::Core ? "Core" : "None"));
+
+	int surface_attribs[16];
+	int nsurface_attribs = 0;
+	surface_attribs[nsurface_attribs++] = EGL_RENDERABLE_TYPE;
+	surface_attribs[nsurface_attribs++] = (version.profile == Profile::ES) ?
+		((version.major_version >= 3) ? EGL_OPENGL_ES3_BIT :
+		 ((version.major_version == 2) ? EGL_OPENGL_ES2_BIT : EGL_OPENGL_ES_BIT)) :
+		EGL_OPENGL_BIT;
+	surface_attribs[nsurface_attribs++] = EGL_SURFACE_TYPE;
+	surface_attribs[nsurface_attribs++] = (m_wi.type != WindowInfo::Type::Surfaceless) ? EGL_WINDOW_BIT : 0;
+	surface_attribs[nsurface_attribs++] = EGL_RED_SIZE;
+	surface_attribs[nsurface_attribs++] = 8;
+	surface_attribs[nsurface_attribs++] = EGL_GREEN_SIZE;
+	surface_attribs[nsurface_attribs++] = 8;
+	surface_attribs[nsurface_attribs++] = EGL_BLUE_SIZE;
+	surface_attribs[nsurface_attribs++] = 8;
+	surface_attribs[nsurface_attribs++] = EGL_NONE;
+	surface_attribs[nsurface_attribs++] = 0;
 
 	EGLint num_configs;
 	if (!eglChooseConfig(m_display, surface_attribs, nullptr, 0, &num_configs) || num_configs == 0)
@@ -475,17 +552,21 @@ bool GLContextEGL::CreateContext(const Version& version, EGLContext share_contex
 		config = configs.front();
 	}
 
-	const int attribs[] = {
-		EGL_CONTEXT_MAJOR_VERSION,
-		version.major_version,
-		EGL_CONTEXT_MINOR_VERSION,
-		version.minor_version,
-		EGL_NONE,
-		0};
-
-	if (!eglBindAPI(EGL_OPENGL_API))
+	int attribs[8];
+	int nattribs = 0;
+	if (version.profile != Profile::NoProfile)
 	{
-		Console.ErrorFmt("eglBindAPI() failed: 0x{:x}", eglGetError());
+		attribs[nattribs++] = EGL_CONTEXT_MAJOR_VERSION;
+		attribs[nattribs++] = version.major_version;
+		attribs[nattribs++] = EGL_CONTEXT_MINOR_VERSION;
+		attribs[nattribs++] = version.minor_version;
+	}
+	attribs[nattribs++] = EGL_NONE;
+	attribs[nattribs++] = 0;
+
+	if (!eglBindAPI((version.profile == Profile::ES) ? EGL_OPENGL_ES_API : EGL_OPENGL_API))
+	{
+		Console.Error("eglBindAPI(%s) failed", (version.profile == Profile::ES) ? "EGL_OPENGL_ES_API" : "EGL_OPENGL_API");
 		return false;
 	}
 
@@ -496,8 +577,11 @@ bool GLContextEGL::CreateContext(const Version& version, EGLContext share_contex
 		return false;
 	}
 
-	Console.WriteLnFmt("Got GL version {}.{}", version.major_version, version.minor_version);
+	Console.WriteLn("eglCreateContext() succeeded for version %u.%u", version.major_version, version.minor_version);
 
+	// Restore the canonical negative-swap-interval (tear-control) capability probe; the
+	// Android GLES port had dropped it, silently forcing SupportsNegativeSwapInterval()
+	// false on desktop EGL. eglGetConfigAttrib works on all platforms, so no guard needed.
 	EGLint min_swap_interval, max_swap_interval;
 	m_supports_negative_swap_interval = false;
 	if (eglGetConfigAttrib(m_display, config.value(), EGL_MIN_SWAP_INTERVAL, &min_swap_interval) &&

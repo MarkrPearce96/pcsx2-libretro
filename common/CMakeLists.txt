@@ -126,9 +126,16 @@ if(ARCH_X86)
 endif()
 
 if(WIN32)
-	enable_language(ASM_MASM)
+	# FastJmp is hand-written assembly (MSVC has no inline asm). x86 uses MASM
+	# (ml64); arm64 uses the Microsoft ARM assembler (armasm64 / ASM_MARMASM).
+	if(ARCH_ARM64)
+		enable_language(ASM_MARMASM)
+		target_sources(common PRIVATE FastJmp.aarch64.asm)
+	else()
+		enable_language(ASM_MASM)
+		target_sources(common PRIVATE FastJmp.asm)
+	endif()
 	target_sources(common PRIVATE
-		FastJmp.asm
 		HTTPDownloaderWinHTTP.cpp
 		HTTPDownloaderWinHTTP.h
 		StackWalker.cpp
@@ -141,6 +148,19 @@ if(WIN32)
 		WIL::WIL
 		winmm
 		pathcch
+	)
+elseif(APPLE AND IOS)
+	target_sources(common PRIVATE
+		Darwin/DarwinThreads.cpp
+		Darwin/DarwinMisc.cpp
+		Darwin/DarwinMisc.h
+		Linux/LnxHostSys.cpp
+	)
+	target_compile_options(common PRIVATE -fobjc-arc)
+	target_link_options(common PRIVATE -fobjc-link-runtime)
+	target_link_libraries(common PRIVATE
+		"-framework Foundation"
+		"-framework UIKit"
 	)
 elseif(APPLE)
 	target_sources(common PRIVATE
@@ -156,6 +176,17 @@ elseif(APPLE)
 	target_link_libraries(common PRIVATE
 		"-framework Foundation"
 		"-framework IOKit"
+	)
+elseif(ANDROID)
+	# Android reuses the Linux host layer plus a JNI-backed HTTP downloader
+	# (relocated from the former android core fork). Source wiring only:
+	# validate against a real NDK build. See REFACTOR_STATUS.md.
+	target_sources(common PRIVATE
+		Linux/LnxHostSys.cpp
+		Linux/LnxThreads.cpp
+		Linux/LnxMisc.cpp
+		HTTPDownloaderAndroid.cpp
+		HTTPDownloaderAndroid.h
 	)
 else()
 	target_sources(common PRIVATE
@@ -189,8 +220,8 @@ if (USE_GCC AND CMAKE_INTERPROCEDURAL_OPTIMIZATION)
 	set_source_files_properties(FastJmp.cpp PROPERTIES COMPILE_FLAGS -fno-lto)
 endif()
 
-if(NOT WIN32)
-	# libcurl-based HTTPDownloader
+if(NOT WIN32 AND NOT ANDROID AND NOT IOS)
+	# libcurl-based HTTPDownloader (Android uses HTTPDownloaderAndroid instead)
 	target_sources(common PRIVATE
 		HTTPDownloaderCurl.cpp
 		HTTPDownloaderCurl.h
