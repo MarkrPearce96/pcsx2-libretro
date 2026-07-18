@@ -232,9 +232,14 @@ jobs:
           # Same contract-package bundler as x86_64 (deploy-contract.md
           # §Dependency bundling): copy deps to pcsx2_libretro_libs/, flatten
           # to @loader_path, ad-hoc sign, and fail on any leftover
-          # /usr/local or /opt/homebrew reference. Native run — no --arch.
+          # /usr/local or /opt/homebrew reference. --arch arm64 is native on
+          # this runner; it also sidesteps a bash-3.2 set -u quirk in the
+          # vendored script where omitting --arch leaves ARCH_PREFIX unset
+          # (empty-array expansion counts as unbound in bash 3.2). Proper fix
+          # belongs in the canonical RetroNest-Project package (drift-checked
+          # vendored copy — do not edit here).
           pcsx2-libretro/retronest-libretro/package-core.sh \
-            build-arm64/pcsx2-libretro/pcsx2_libretro.dylib
+            build-arm64/pcsx2-libretro/pcsx2_libretro.dylib --arch arm64
 
       - name: Upload dylib artifact
         uses: actions/upload-artifact@v4
