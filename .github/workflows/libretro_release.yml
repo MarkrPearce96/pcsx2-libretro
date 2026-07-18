@@ -1,11 +1,11 @@
 name: libretro_release
 
 # Builds the pcsx2-libretro core on tag push and publishes a GitHub Release
-# with two zips:
-#   pcsx2_libretro.dylib.zip        — macOS x86_64 (name kept for existing
-#                                     RetroNest downloaders)
-#   pcsx2_libretro-macos-arm64.zip  — native Apple Silicon (ARMSX2 arm64
-#                                     recompilers; no Rosetta)
+# with ONE macOS UNIVERSAL zip, pcsx2_libretro.dylib.zip (historical name —
+# every existing install resolves it): x86_64 (upstream recompilers, Rosetta)
+# + arm64 (ARMSX2 recompilers, native) built in parallel jobs, dep-bundled
+# per-arch, then lipo'd pairwise in a macOS merge job. A future Windows port
+# ships its own asset — this workflow is macOS-only.
 #
 # Spec: see RetroNest-Project/docs/superpowers/specs/2026-05-21-pcsx2-libretro-github-publishing-design.md
 # Process: see UPSTREAM-UPDATE.md at the repo root.
@@ -255,9 +255,77 @@ jobs:
           path: build-arm64/pcsx2-libretro/pcsx2_libretro_libs/
           if-no-files-found: error
 
+  merge-universal:
+    name: Lipo universal core
+    # Needs macOS for lipo/codesign. Merges the two per-arch bundles into
+    # one universal dylib + universal bundled libs — the same pattern as
+    # dolphin's universal lane (2026-07-18), just split across jobs because
+    # pcsx2's arch builds run in parallel.
+    needs: [build, build-arm64]
+    runs-on: macos-14
+    timeout-minutes: 15
+    steps:
+      - name: Download x86_64 dylib
+        uses: actions/download-artifact@v4
+        with:
+          name: pcsx2_libretro-dylib
+          path: stage-x86_64/
+
+      - name: Download x86_64 bundled libs
+        uses: actions/download-artifact@v4
+        with:
+          name: pcsx2_libretro-libs
+          path: stage-x86_64/pcsx2_libretro_libs/
+
+      - name: Download arm64 dylib
+        uses: actions/download-artifact@v4
+        with:
+          name: pcsx2_libretro-dylib-arm64
+          path: stage-arm64/
+
+      - name: Download arm64 bundled libs
+        uses: actions/download-artifact@v4
+        with:
+          name: pcsx2_libretro-libs-arm64
+          path: stage-arm64/pcsx2_libretro_libs/
+
+      - name: Lipo dylib + libs pairwise, sign, verify
+        run: |
+          set -euo pipefail
+          mkdir -p universal/pcsx2_libretro_libs
+          lipo -create stage-x86_64/pcsx2_libretro.dylib \
+                       stage-arm64/pcsx2_libretro.dylib \
+               -output universal/pcsx2_libretro.dylib
+          # Lib-set parity guard (dolphin lane lesson): a name present on
+          # one arch only means the arch builds resolved different deps and
+          # the universal core would fail on the slice missing it.
+          diff <(ls stage-x86_64/pcsx2_libretro_libs | sort) \
+               <(ls stage-arm64/pcsx2_libretro_libs | sort)
+          for lib in stage-arm64/pcsx2_libretro_libs/*.dylib; do
+            name=$(basename "$lib")
+            lipo -create "stage-x86_64/pcsx2_libretro_libs/$name" "$lib" \
+                 -output "universal/pcsx2_libretro_libs/$name"
+            codesign --force --sign - "universal/pcsx2_libretro_libs/$name"
+          done
+          codesign --force --sign - universal/pcsx2_libretro.dylib
+          lipo -info universal/pcsx2_libretro.dylib | tee /dev/stderr \
+            | grep -q "x86_64 arm64\|arm64 x86_64"
+          if otool -L universal/pcsx2_libretro.dylib | tail -n +2 \
+               | grep -E '/usr/local|/opt/homebrew'; then
+            echo "::error::universal dylib still references Homebrew paths"
+            exit 1
+          fi
+
+      - name: Upload universal artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pcsx2_libretro-universal
+          path: universal/
+          if-no-files-found: error
+
   release:
     name: Package and publish release
-    needs: [build, build-arm64]
+    needs: merge-universal
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
@@ -266,10 +334,10 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Download dylib artifact
+      - name: Download universal artifact
         uses: actions/download-artifact@v4
         with:
-          name: pcsx2_libretro-dylib
+          name: pcsx2_libretro-universal
           path: stage/
 
       - name: Download resources artifact
@@ -277,30 +345,6 @@ jobs:
         with:
           name: pcsx2_libretro-resources
           path: stage/pcsx2_libretro_resources/
-
-      - name: Download bundled libs artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: pcsx2_libretro-libs
-          path: stage/pcsx2_libretro_libs/
-
-      - name: Download arm64 dylib artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: pcsx2_libretro-dylib-arm64
-          path: stage-arm64/
-
-      - name: Download resources artifact (arm64 stage)
-        uses: actions/download-artifact@v4
-        with:
-          name: pcsx2_libretro-resources
-          path: stage-arm64/pcsx2_libretro_resources/
-
-      - name: Download arm64 bundled libs artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: pcsx2_libretro-libs-arm64
-          path: stage-arm64/pcsx2_libretro_libs/
 
       - name: Fetch upstream master (for SHA lookup)
         run: |
@@ -321,57 +365,47 @@ jobs:
           UPSTREAM_SHA="$(git merge-base HEAD upstream/master)"
           UPSTREAM_SHORT="$(echo "$UPSTREAM_SHA" | cut -c1-7)"
           BUILD_DATE="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
-          write_version() {
-            {
-              echo "tag=$TAG"
-              echo "platform=$1"
-              echo "fork_sha=$FORK_SHA"
-              echo "upstream_sha=$UPSTREAM_SHA"
-              echo "upstream_ref=upstream/master"
-              echo "build_date=$BUILD_DATE"
-            } > "$2"
-          }
-          write_version macos-x86_64 stage/VERSION
-          write_version macos-arm64 stage-arm64/VERSION
+          {
+            echo "tag=$TAG"
+            echo "platform=macos-universal"
+            echo "fork_sha=$FORK_SHA"
+            echo "upstream_sha=$UPSTREAM_SHA"
+            echo "upstream_ref=upstream/master"
+            echo "build_date=$BUILD_DATE"
+          } > stage/VERSION
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "upstream_short=$UPSTREAM_SHORT" >> "$GITHUB_OUTPUT"
 
       - name: Verify staged contents
         run: |
-          for dir in stage stage-arm64; do
-            ls -la "$dir/"
-            test -f "$dir/pcsx2_libretro.dylib"
-            test -d "$dir/pcsx2_libretro_resources"
-            test -f "$dir/VERSION"
-            cat "$dir/VERSION"
-          done
+          ls -la stage/
+          test -f stage/pcsx2_libretro.dylib
+          test -d stage/pcsx2_libretro_resources
+          test -d stage/pcsx2_libretro_libs
+          test -f stage/VERSION
+          cat stage/VERSION
 
-      - name: Create zips
+      - name: Create zip
         run: |
-          # x86_64 keeps the historical name pcsx2_libretro.dylib.zip so
-          # existing RetroNest installs keep resolving it; arm64 gets an
-          # explicit platform-suffixed name for the per-platform manifests.
+          # ONE universal zip under the historical name: every existing
+          # install and both RetroNest app slices resolve it; no per-arch
+          # flip-flopping of the cores dir. (The per-arch
+          # pcsx2_libretro-macos-arm64.zip existed only for v2026.07.18;
+          # RetroNest's arm64-preferred asset rule stays dormant unless a
+          # per-arch asset reappears.)
           cd stage
           zip -r ../pcsx2_libretro.dylib.zip \
             pcsx2_libretro.dylib \
             pcsx2_libretro_resources \
             pcsx2_libretro_libs \
             VERSION
-          cd ../stage-arm64
-          zip -r ../pcsx2_libretro-macos-arm64.zip \
-            pcsx2_libretro.dylib \
-            pcsx2_libretro_resources \
-            pcsx2_libretro_libs \
-            VERSION
           cd ..
-          ls -la pcsx2_libretro.dylib.zip pcsx2_libretro-macos-arm64.zip
+          ls -la pcsx2_libretro.dylib.zip
 
       - name: Compose release body
         run: |
           {
-            echo "**Platforms:**"
-            echo "- \`pcsx2_libretro.dylib.zip\` — macOS x86_64 (Intel + Apple Silicon via Rosetta)"
-            echo "- \`pcsx2_libretro-macos-arm64.zip\` — macOS arm64 native (ARMSX2 recompilers)"
+            echo "**Platform:** macOS universal (Apple Silicon native arm64 via ARMSX2 recompilers + Intel/Rosetta x86_64)"
             echo "**Upstream PCSX2:** ${{ steps.meta.outputs.upstream_short }} (master)"
             echo ""
             echo "## Changes since previous release"
@@ -384,7 +418,5 @@ jobs:
           name: ${{ steps.meta.outputs.tag }}
           body_path: release_body.md
           generate_release_notes: true   # appends auto-generated commit list below body
-          files: |
-            pcsx2_libretro.dylib.zip
-            pcsx2_libretro-macos-arm64.zip
+          files: pcsx2_libretro.dylib.zip
           fail_on_unmatched_files: true
