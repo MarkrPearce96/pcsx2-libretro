@@ -5,7 +5,8 @@ in-process by RetroNest. Branch: `main`, remote `origin` =
 `MarkrPearce96/pcsx2-libretro` (private, standalone — NOT a GitHub fork).
 
 ## Build + arch policy
-Two architectures, one tree (branch `arm64-merge`; `main` is still x86-only):
+Two architectures, one tree (branch `main` since the 2026-07-19 merge;
+pre-ARMSX2 history preserved at `main-pre-arm64`):
 - **x86_64** (upstream recompilers): local dir `build-x86_64`. CMake MUST use
   `arch -x86_64 /usr/local/bin/cmake` — bare `arch -x86_64 cmake` resolves to
   the arm64 Homebrew cmake and dies with "Bad CPU type".
@@ -47,9 +48,10 @@ runs a publish-free dry-run (release job is tag-gated). Releases are
 `/opt/homebrew/...` links (that class of bug bricked in-app updates once;
 otool guards in CI enforce it). Metallibs are compiled inline in the x86
 job — they MUST be rebuilt whenever the PCSX2 base moves (stale ones assert
-in GSDeviceMTL). Releases are currently cut from the `arm64-merge` branch
-(`main` still holds the pre-ARMSX2 May x86 base until the merge). A future
-Windows port ships a separate win-x86_64 asset — this workflow is macOS-only.
+in GSDeviceMTL). Releases are cut from `main` (holds the ARMSX2-merged July
+base since 2026-07-19; the pre-ARMSX2 May x86 base lives at
+`main-pre-arm64`). A future Windows port ships a separate win-x86_64 asset —
+this workflow is macOS-only.
 
 ## RetroNest contract package
 `pcsx2-libretro/retronest-libretro/` is a VENDORED COPY of
