@@ -40,9 +40,10 @@ git push origin "$TAG"
 ```
 
 That last `git push origin <tag>` triggers `.github/workflows/libretro_release.yml`.
-The workflow builds the core on a `macos-13` runner, packages
-`pcsx2_libretro-macos-x86_64.zip`, and creates a GitHub Release with the
-zip attached. RetroNest can then download it.
+The workflow builds the core for BOTH arches on `macos-14` runners (x86_64
+under Rosetta + native arm64/ARMSX2), lipos them into one UNIVERSAL
+`pcsx2_libretro.dylib.zip` (see CLAUDE.md → Releases), and creates a GitHub
+Release with the zip attached. RetroNest can then download it.
 
 If you need to cut a second release on the same day, suffix the tag with
 `.1`, `.2`, etc — e.g. `v2026.05.21.1`.

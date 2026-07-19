@@ -35,12 +35,21 @@ Deploy = copy `build-x86_64/.../pcsx2_libretro.dylib` to
 `pcsx2_libretro_resources/` when resources changed).
 
 ## Releases (CI)
-`.github/workflows/libretro_release.yml` builds x86_64 under Rosetta on
-tags (`v2026.MM.DD[.n]`). Releases are **self-contained**: dylibbundler
-copies the ~11 Homebrew deps into `pcsx2_libretro_libs/` with flat
-`@loader_path/<lib>` refs and ad-hoc signs — never reintroduce bare
-`/usr/local/opt/...` links (that class of bug bricked in-app updates once;
-an otool guard in CI enforces it).
+`.github/workflows/libretro_release.yml` publishes ONE **UNIVERSAL** macOS
+zip on tags (`v2026.MM.DD[.n]`), per the standing all-cores-universal policy:
+parallel x86_64 (Rosetta, /usr/local brew) + arm64 (native, /opt/homebrew,
+ARMSX2 recompilers) build jobs → per-arch dep bundles → a macos merge job
+lipos dylib + the ~11 bundled libs pairwise, re-signs, and verifies (both
+slices, no Homebrew refs, lib-set parity guard) → `pcsx2_libretro.dylib.zip`
+(historical name; VERSION platform=macos-universal). `workflow_dispatch`
+runs a publish-free dry-run (release job is tag-gated). Releases are
+**self-contained**: never reintroduce bare `/usr/local/opt/...` or
+`/opt/homebrew/...` links (that class of bug bricked in-app updates once;
+otool guards in CI enforce it). Metallibs are compiled inline in the x86
+job — they MUST be rebuilt whenever the PCSX2 base moves (stale ones assert
+in GSDeviceMTL). Releases are currently cut from the `arm64-merge` branch
+(`main` still holds the pre-ARMSX2 May x86 base until the merge). A future
+Windows port ships a separate win-x86_64 asset — this workflow is macOS-only.
 
 ## RetroNest contract package
 `pcsx2-libretro/retronest-libretro/` is a VENDORED COPY of
